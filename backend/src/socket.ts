@@ -20,44 +20,95 @@ type RoomState = {
 
 const rooms = new Map<string, RoomState>()
 
-async function initRoom(roomId: string) {
-  if (rooms.has(roomId)) return rooms.get(roomId)!
-  // load players and charStates from DB
-  const st: RoomState = { id: roomId, players: [], charStates: [], phase: 'lobby', remainingTime: 30, pendingBanVotes: {} }
-  // Only query by UUID if the provided roomId looks like a UUID to avoid casting errors
+async function initRoom(rawRoomId: string) {
+  // ── Step 1: resolve canonical UUID ──────────────────────────────────────
+  // If the caller already passed a cached UUID-keyed state, return it fast.
+  if (rooms.has(rawRoomId)) return rooms.get(rawRoomId)!
+
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   let roomRow: any = undefined
-  if (typeof roomId === 'string' && uuidRegex.test(roomId)) {
-    roomRow = (await query('SELECT id, status, phase_index, step_index, remaining_selections FROM rooms WHERE id=$1', [roomId])).rows[0]
+
+  if (uuidRegex.test(rawRoomId)) {
+    // Looks like a UUID — query directly
+    roomRow = (await query(
+      'SELECT id, status, phase_index, step_index, remaining_selections FROM rooms WHERE id=$1',
+      [rawRoomId]
+    )).rows[0]
   }
-  // If not found by UUID, allow looking up by numeric PIN (short room code)
-  if (!roomRow && typeof roomId === 'string' && roomId.length < 36) {
-    const byPin = (await query('SELECT id, status, phase_index, step_index, remaining_selections FROM rooms WHERE pin=$1', [roomId])).rows[0]
-    if (byPin) {
-      roomRow = byPin
-      // use the canonical UUID id for subsequent queries
-      roomId = roomRow.id
-    }
+
+  if (!roomRow) {
+    // Treat rawRoomId as a PIN and resolve to the UUID row
+    const byPin = (await query(
+      'SELECT id, status, phase_index, step_index, remaining_selections FROM rooms WHERE pin=$1',
+      [rawRoomId]
+    )).rows[0]
+    if (byPin) roomRow = byPin
   }
-  if (roomRow) {
-    st.phase = roomRow.status || 'lobby'
-    st.phaseIndex = roomRow.phase_index ?? 0
-    st.stepIndex = roomRow.step_index ?? 0
-    st.remainingSelections = roomRow.remaining_selections ?? 0
+
+  if (!roomRow) {
+    // Room not found — return a minimal stub so callers can emit room_not_found
+    return null as unknown as RoomState
   }
-  const ps = await query('SELECT id, name, team, is_host, socket_id FROM players WHERE room_id=$1', [roomId])
-  st.players = ps.rows.map((r:any) => ({ id: r.id, name: r.name, team: r.team, isHost: r.is_host, socketId: r.socket_id }))
-  // ensure room_char_states exist for this room; if not, seed from characters
-  const csCount = (await query('SELECT COUNT(*) FROM room_char_states WHERE room_id=$1', [roomId])).rows[0].count
+
+  // ── Step 2: canonicalId is ALWAYS the UUID from the DB row ──────────────
+  const canonicalId: string = roomRow.id
+
+  // If we previously cached under the PIN key, return that same object
+  // (avoids duplicate state; also handles the re-connect path)
+  if (rooms.has(canonicalId)) {
+    // Also cache under the rawRoomId alias so next call hits the fast path
+    if (rawRoomId !== canonicalId) rooms.set(rawRoomId, rooms.get(canonicalId)!)
+    return rooms.get(canonicalId)!
+  }
+
+  // ── Step 3: build RoomState with st.id = canonicalId ────────────────────
+  const st: RoomState = {
+    id: canonicalId,          // ← always UUID, never PIN
+    players: [],
+    charStates: [],
+    phase: roomRow.status || 'lobby',
+    phaseIndex: roomRow.phase_index ?? 0,
+    stepIndex: roomRow.step_index ?? 0,
+    remainingSelections: roomRow.remaining_selections ?? 0,
+    remainingTime: 30,
+    pendingBanVotes: {}
+  }
+
+  // ── Step 4: load players (use canonicalId for all DB queries) ────────────
+  const ps = await query(
+    'SELECT id, name, team, is_host, socket_id FROM players WHERE room_id=$1',
+    [canonicalId]
+  )
+  st.players = ps.rows.map((r: any) => ({
+    id: r.id, name: r.name, team: r.team, isHost: r.is_host, socketId: r.socket_id
+  }))
+
+  // ── Step 5: seed room_char_states if missing ─────────────────────────────
+  const csCount = (await query(
+    'SELECT COUNT(*) FROM room_char_states WHERE room_id=$1',
+    [canonicalId]
+  )).rows[0].count
   if (parseInt(csCount) === 0) {
     const chars = (await query('SELECT id FROM characters')).rows
     for (const c of chars) {
-      await query('INSERT INTO room_char_states (room_id, character_id, state) VALUES ($1, $2, $3) ON CONFLICT (room_id, character_id) DO NOTHING', [roomId, c.id, 'available'])
+      await query(
+        'INSERT INTO room_char_states (room_id, character_id, state) VALUES ($1, $2, $3) ON CONFLICT (room_id, character_id) DO NOTHING',
+        [canonicalId, c.id, 'available']
+      )
     }
   }
-  const cs = await query('SELECT character_id, state, picked_by, picked_team FROM room_char_states WHERE room_id=$1', [roomId])
-  st.charStates = cs.rows.map((r:any)=>({ characterId: r.character_id, state: r.state, pickedBy: r.picked_by, pickedTeam: r.picked_team }))
-  rooms.set(roomId, st)
+  const cs = await query(
+    'SELECT character_id, state, picked_by, picked_team FROM room_char_states WHERE room_id=$1',
+    [canonicalId]
+  )
+  st.charStates = cs.rows.map((r: any) => ({
+    characterId: r.character_id, state: r.state, pickedBy: r.picked_by, pickedTeam: r.picked_team
+  }))
+
+  // ── Step 6: store under canonicalId (and optionally alias under PIN) ─────
+  rooms.set(canonicalId, st)
+  if (rawRoomId !== canonicalId) rooms.set(rawRoomId, st)
+
   return st
 }
 
@@ -77,82 +128,84 @@ function broadcastState(io: Server, roomId: string) {
 }
 
 function startTimer(io: Server, roomId: string) {
+  // roomId must be canonical UUID (s.id)
   const s = rooms.get(roomId)
   if (!s) return
   clearInterval(s.timer)
   s.remainingTime = 30
+  const canonicalId = s.id
   s.timer = setInterval(() => {
     if (s.remainingTime! <= 0) {
       clearInterval(s.timer)
-      io.to(roomId).emit('timer:update', { remainingTime: 0 })
-      // handle timeout: BAN -> skip, PICK -> random pick
-      void handleTimeout(io, roomId)
+      io.to(canonicalId).emit('timer:update', { remainingTime: 0 })
+      void handleTimeout(io, canonicalId)
       return
     }
     s.remainingTime!--
-    io.to(roomId).emit('timer:update', { remainingTime: s.remainingTime })
+    io.to(canonicalId).emit('timer:update', { remainingTime: s.remainingTime })
   }, 1000)
 }
 
 async function handleTimeout(io: Server, roomId: string) {
   const s = rooms.get(roomId)
   if (!s) return
+  const canonicalId = s.id   // always UUID
   try {
     if (s.phase && s.phase.startsWith('BAN')) {
       // skip: just advance turn
-      io.to(roomId).emit('action:skipped', { reason: 'timeout', phase: s.phase })
-      await advanceTurn(io, roomId)
+      io.to(canonicalId).emit('action:skipped', { reason: 'timeout', phase: s.phase })
+      await advanceTurn(io, canonicalId)
       return
     }
     // for PICK phases, perform a random pick for the current turnTeam
     if (s.phase && s.phase.startsWith('PICK')) {
       const team = s.turnTeam
-      if (!team) { await advanceTurn(io, roomId); return }
+      if (!team) { await advanceTurn(io, canonicalId); return }
       const client = await getClient()
       try {
         await client.query('BEGIN')
         // pick a random available character (FOR UPDATE to lock)
-        const rs = await client.query(`SELECT character_id FROM room_char_states WHERE room_id=$1 AND state='available' ORDER BY RANDOM() LIMIT 1 FOR UPDATE`, [roomId])
+        const rs = await client.query(`SELECT character_id FROM room_char_states WHERE room_id=$1 AND state='available' ORDER BY RANDOM() LIMIT 1 FOR UPDATE`, [canonicalId])
         if (!rs.rows.length) {
           await client.query('ROLLBACK')
           client.release()
-          await advanceTurn(io, roomId)
+          await advanceTurn(io, canonicalId)
           return
         }
         const characterId = rs.rows[0].character_id
         // ensure team not full
-        const pickedCountRes = await client.query('SELECT COUNT(*) FROM room_char_states WHERE room_id=$1 AND state=$2 AND picked_team=$3', [roomId, 'picked', team])
+        const pickedCountRes = await client.query('SELECT COUNT(*) FROM room_char_states WHERE room_id=$1 AND state=$2 AND picked_team=$3', [canonicalId, 'picked', team])
         const pickedCount = parseInt(pickedCountRes.rows[0].count)
         if (pickedCount >= 3) {
           await client.query('ROLLBACK')
           client.release()
-          await advanceTurn(io, roomId)
+          await advanceTurn(io, canonicalId)
           return
         }
-        await client.query('UPDATE room_char_states SET state=$1, picked_by=$2, picked_team=$3 WHERE room_id=$4 AND character_id=$5', ['picked', null, team, roomId, characterId])
-        await client.query('UPDATE rooms SET remaining_selections = GREATEST(0, remaining_selections - 1) WHERE id=$1', [roomId])
+        await client.query('UPDATE room_char_states SET state=$1, picked_by=$2, picked_team=$3 WHERE room_id=$4 AND character_id=$5', ['picked', null, team, canonicalId, characterId])
+        await client.query('UPDATE rooms SET remaining_selections = GREATEST(0, remaining_selections - 1) WHERE id=$1', [canonicalId])
         await client.query('COMMIT')
         client.release()
         // update in-memory
         const cs = s.charStates.find(c=>c.characterId===characterId)
         if (cs) { cs.state = 'picked'; cs.pickedBy = undefined; cs.pickedTeam = team }
-        io.to(roomId).emit('action:confirmed', { playerId: null, actionType: 'pick', characterId })
-        const roomRow = (await query('SELECT remaining_selections FROM rooms WHERE id=$1', [roomId])).rows[0]
+        io.to(canonicalId).emit('action:confirmed', { playerId: null, actionType: 'pick', characterId })
+        const roomRow = (await query('SELECT remaining_selections FROM rooms WHERE id=$1', [canonicalId])).rows[0]
         if (roomRow) s.remainingSelections = roomRow.remaining_selections
-        broadcastState(io, roomId)
-        await advanceTurn(io, roomId)
+        broadcastState(io, canonicalId)
+        await advanceTurn(io, canonicalId)
         return
       } catch (e) {
         await client.query('ROLLBACK')
         client.release()
         console.error(e)
-        io.to(roomId).emit('error', { message: 'server_error' })
+        io.to(canonicalId).emit('error', { message: 'server_error' })
         return
       }
     }
     // default: advance
-    await advanceTurn(io, roomId)
-  } catch (e) { console.error(e); io.to(roomId).emit('error', { message: 'server_error' }) }
+    await advanceTurn(io, canonicalId)
+  } catch (e) { console.error(e); io.to(canonicalId).emit('error', { message: 'server_error' }) }
 }
 
 const PHASE_SEQUENCE = [
@@ -180,34 +233,35 @@ async function setCurrentStep(io: Server, s: RoomState, phaseIndex: number, step
   }
 
   s.pendingBanVotes = {}
-  // persist
+  // persist – s.id is always the canonical UUID here
   await query('UPDATE rooms SET phase_index=$1, step_index=$2, status=$3, remaining_selections=$4 WHERE id=$5', [phaseIndex, stepIndex, s.phase, s.remainingSelections, s.id])
 }
 
 async function advanceTurn(io: Server, roomId: string) {
+  // roomId here must always be the canonical UUID (s.id); look up via UUID key
   const s = rooms.get(roomId)
   if (!s) return
+  const canonicalId = s.id   // redundant guard – s.id is always UUID
   s.pendingBanVotes = {}
 
   if (s.phase && s.phase.startsWith('BAN')) {
     await setCurrentStep(io, s, 1, 0)
     s.remainingTime = 30
-    io.to(roomId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
-    startTimer(io, roomId)
+    io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
+    startTimer(io, canonicalId)
     return
   }
 
   // decrease remainingSelections if present
   if (s.remainingSelections && s.remainingSelections > 0) {
     s.remainingSelections!--
-    // persist remainingSelections
-    await query('UPDATE rooms SET remaining_selections=$1 WHERE id=$2', [s.remainingSelections, s.id])
+    await query('UPDATE rooms SET remaining_selections=$1 WHERE id=$2', [s.remainingSelections, canonicalId])
   }
   // if still selections left for this step, keep same team
   if (s.remainingSelections && s.remainingSelections > 0) {
     s.remainingTime = 30
-    io.to(roomId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
-    startTimer(io, roomId)
+    io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
+    startTimer(io, canonicalId)
     return
   }
   // move to next step
@@ -223,14 +277,14 @@ async function advanceTurn(io: Server, roomId: string) {
     s.turnTeam = undefined
     s.remainingSelections = 0
     clearInterval(s.timer)
-    io.to(roomId).emit('phase:finished', { })
-    broadcastState(io, roomId)
+    io.to(canonicalId).emit('phase:finished', { })
+    broadcastState(io, canonicalId)
     return
   }
   await setCurrentStep(io, s, nextPhase, nextStep)
   s.remainingTime = 30
-  io.to(roomId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
-  startTimer(io, roomId)
+  io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
+  startTimer(io, canonicalId)
 }
 
 export function createSockets(io: Server) {
@@ -304,6 +358,7 @@ export function createSockets(io: Server) {
     socket.on('startBanPick', async ({ roomId, playerId }: any) => {
       const s = await initRoom(roomId)
       if (!s) return socket.emit('error', { message: 'no_room' })
+      const canonicalId = s.id
       // only host can start
       const p = s.players.find(p => p.id === playerId)
       if (!p || !p.isHost) return socket.emit('error', { message: 'not_host' })
@@ -311,14 +366,15 @@ export function createSockets(io: Server) {
       // initialize sequence
       await setCurrentStep(io, s, 0, 0)
       // persist status
-      await query('UPDATE rooms SET status=$1 WHERE id=$2', [s.phase, s.id])
-      startTimer(io, s.id)
-      broadcastState(io, s.id)
+      await query('UPDATE rooms SET status=$1 WHERE id=$2', [s.phase, canonicalId])
+      startTimer(io, canonicalId)
+      broadcastState(io, canonicalId)
     })
 
     socket.on('stopBanPick', async ({ roomId, playerId }: any) => {
       const s = await initRoom(roomId)
       if (!s) return socket.emit('error', { message: 'no_room' })
+      const canonicalId = s.id
       const p = s.players.find(p => p.id === playerId)
       if (!p || !p.isHost) return socket.emit('error', { message: 'not_host' })
       // stop sequence and reset to lobby
@@ -328,9 +384,9 @@ export function createSockets(io: Server) {
       s.turnTeam = undefined
       s.remainingSelections = 0
       clearInterval(s.timer)
-      await query('UPDATE rooms SET status=$1, phase_index=$2, step_index=$3, remaining_selections=$4 WHERE id=$5', ['lobby', 0, 0, 0, s.id])
-      io.to(s.id).emit('action:stopped', { by: playerId })
-      broadcastState(io, s.id)
+      await query('UPDATE rooms SET status=$1, phase_index=$2, step_index=$3, remaining_selections=$4 WHERE id=$5', ['lobby', 0, 0, 0, canonicalId])
+      io.to(canonicalId).emit('action:stopped', { by: playerId })
+      broadcastState(io, canonicalId)
     })
 
     socket.on('requestAction', async ({ roomId, playerId, actionType, characterId }: any) => {
@@ -382,7 +438,7 @@ export function createSockets(io: Server) {
             if (!votedAll) {
               await client.query('ROLLBACK')
               client.release()
-              broadcastState(io, s.id)
+              broadcastState(io, canonicalId)
               return
             }
 
@@ -415,11 +471,11 @@ export function createSockets(io: Server) {
                 cs.pickedTeam = undefined
               }
             }
-            io.to(s.id).emit('action:confirmed', { playerId, actionType, characterId: selectedCharacters })
-            const roomRow = (await query('SELECT remaining_selections FROM rooms WHERE id=$1', [s.id])).rows[0]
+            io.to(canonicalId).emit('action:confirmed', { playerId, actionType, characterId: selectedCharacters })
+            const roomRow = (await query('SELECT remaining_selections FROM rooms WHERE id=$1', [canonicalId])).rows[0]
             if (roomRow) s.remainingSelections = roomRow.remaining_selections
-            broadcastState(io, s.id)
-            await advanceTurn(io, s.id)
+            broadcastState(io, canonicalId)
+            await advanceTurn(io, canonicalId)
             return
           }
 
@@ -464,24 +520,26 @@ export function createSockets(io: Server) {
           cs.state = actionType === 'ban' ? 'banned' : 'picked'
           if (actionType === 'pick') { cs.pickedBy = playerId; cs.pickedTeam = s.turnTeam }
         }
-        io.to(s.id).emit('action:confirmed', { playerId, actionType, characterId })
+        io.to(canonicalId).emit('action:confirmed', { playerId, actionType, characterId })
         // refresh remainingSelections from DB
-        const roomRow = (await query('SELECT remaining_selections FROM rooms WHERE id=$1', [s.id])).rows[0]
+        const roomRow = (await query('SELECT remaining_selections FROM rooms WHERE id=$1', [canonicalId])).rows[0]
         if (roomRow) s.remainingSelections = roomRow.remaining_selections
-        broadcastState(io, s.id)
-        await advanceTurn(io, s.id)
+        broadcastState(io, canonicalId)
+        await advanceTurn(io, canonicalId)
       } catch(e) { console.error(e); socket.emit('error', { message: 'server_error' }) }
     })
 
     socket.on('assignTeam', async ({ roomId, playerId, team }: any) => {
       try {
         const s = await initRoom(roomId)
+        if (!s) return
+        const canonicalId = s.id
         const p = s.players.find(p => p.id === playerId)
         if (!p) return
         p.team = team
         await query('UPDATE players SET team=$1 WHERE id=$2', [team, playerId])
-        io.to(s.id).emit('room:players', { players: s.players })
-        broadcastState(io, s.id)
+        io.to(canonicalId).emit('room:players', { players: s.players })
+        broadcastState(io, canonicalId)
       } catch(e) { console.error(e) }
     })
 
