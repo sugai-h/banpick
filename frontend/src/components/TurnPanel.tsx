@@ -8,11 +8,14 @@ export default function TurnPanel(){
   const players = useStore(s=>s.players)
   const turnPlayers = turnTeam ? players.filter(p=>p.team===turnTeam) : []
   const percent = Math.max(0, Math.min(100, Math.round((remainingTime/30)*100)))
+  const turnLabel = phase && phase.startsWith('BAN') ? '全員選択' : (turnTeam ? TEAM_LABELS[turnTeam] : '—')
   return (
     <div className="bg-gray-800 p-3 rounded">
       <div className="text-sm">Phase: {phase}</div>
-      <div className="text-lg font-bold">Turn: {turnTeam ? TEAM_LABELS[turnTeam] : '—'}</div>
-      {turnTeam && (
+      <div className="text-lg font-bold">Turn: {turnLabel}</div>
+      {phase && phase.startsWith('BAN') ? (
+        <div className="text-sm text-gray-300">Players: {players.length ? players.map(p=>p.name + (p.isHost? ' (Host)':'')).join(', ') : '—'}</div>
+      ) : turnTeam && (
         <div className="text-sm text-gray-300">Players: {turnPlayers.length ? turnPlayers.map(p=>p.name + (p.isHost? ' (Host)':'')).join(', ') : '—'}</div>
       )}
       <div className="text-sm">残り時間: {remainingTime}s</div>

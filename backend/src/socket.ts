@@ -170,8 +170,15 @@ async function setCurrentStep(io: Server, s: RoomState, phaseIndex: number, step
   s.phaseIndex = phaseIndex
   s.stepIndex = stepIndex
   s.phase = PHASE_SEQUENCE[phaseIndex].name
-  s.turnTeam = PHASE_SEQUENCE[phaseIndex].steps[stepIndex].team as 'A'|'B'
-  s.remainingSelections = PHASE_SEQUENCE[phaseIndex].steps[stepIndex].count
+
+  if (s.phase === 'BAN') {
+    s.turnTeam = undefined
+    s.remainingSelections = Math.max(0, s.players.length)
+  } else {
+    s.turnTeam = PHASE_SEQUENCE[phaseIndex].steps[stepIndex].team as 'A'|'B'
+    s.remainingSelections = PHASE_SEQUENCE[phaseIndex].steps[stepIndex].count
+  }
+
   s.pendingBanVotes = {}
   // persist
   await query('UPDATE rooms SET phase_index=$1, step_index=$2, status=$3, remaining_selections=$4 WHERE id=$5', [phaseIndex, stepIndex, s.phase, s.remainingSelections, s.id])
@@ -183,15 +190,6 @@ async function advanceTurn(io: Server, roomId: string) {
   s.pendingBanVotes = {}
 
   if (s.phase && s.phase.startsWith('BAN')) {
-    const nextTeam = getNextBanTeam(s.turnTeam)
-    if (nextTeam) {
-      s.turnTeam = nextTeam
-      s.remainingSelections = 0
-      s.remainingTime = 30
-      io.to(roomId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
-      startTimer(io, roomId)
-      return
-    }
     await setCurrentStep(io, s, 1, 0)
     s.remainingTime = 30
     io.to(roomId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
@@ -347,7 +345,6 @@ export function createSockets(io: Server) {
 
         if (actionType === 'ban') {
           if (s.phase !== 'BAN') return socket.emit('error', { message: 'invalid_phase_for_action' })
-          if (player.team !== s.turnTeam) return socket.emit('error', { message: 'not_your_turn' })
         }
 
         if (actionType === 'pick') {
@@ -355,17 +352,13 @@ export function createSockets(io: Server) {
           if (s.turnTeam && player.team !== s.turnTeam) return socket.emit('error', { message: 'not_your_turn' })
           if (!player.team) return socket.emit('error', { message: 'no_team_assigned' })
         }
-        // verify turn
-        if (s.turnTeam && !s.players.find(p => p.id === playerId && p.team === s.turnTeam)) {
-          return socket.emit('error', { message: 'not_your_turn' })
-        }
         const client = await getClient()
         try {
           await client.query('BEGIN')
 
-          if (actionType === 'ban' && s.phase === 'BAN' && s.turnTeam) {
-            const teamPlayers = s.players.filter((player) => player.team === s.turnTeam)
-            if (!teamPlayers.length) {
+          if (actionType === 'ban' && s.phase === 'BAN') {
+            const roomPlayers = s.players
+            if (!roomPlayers.length) {
               await client.query('ROLLBACK')
               client.release()
               return socket.emit('error', { message: 'not_your_turn' })
@@ -374,8 +367,8 @@ export function createSockets(io: Server) {
             s.pendingBanVotes ??= {}
             s.pendingBanVotes[playerId] = characterId
 
-            const teamVoteIds = teamPlayers.map((player) => player.id)
-            const votedAll = teamVoteIds.every((id) => Object.prototype.hasOwnProperty.call(s.pendingBanVotes, id))
+            const voteIds = roomPlayers.map((player) => player.id)
+            const votedAll = voteIds.every((id) => Object.prototype.hasOwnProperty.call(s.pendingBanVotes, id))
 
             if (!votedAll) {
               await client.query('ROLLBACK')

@@ -20,11 +20,9 @@ export default function CharacterGrid({ socket }: any){
   function onClickChar(c: any) {
     const state = charStates.find((s:any)=>s.characterId===c.id)?.state || 'available'
     if (state !== 'available') return
-    // determine action type based on phase: if current phase is BAN show ban button, else pick
     const phase = useStore.getState().phase
     const action: 'ban'|'pick' = phase && phase.startsWith('BAN') ? 'ban' : 'pick'
-    // only allow if current player team matches turnTeam
-    if (turnTeam && currentPlayer?.team !== turnTeam) return
+    if (action === 'pick' && turnTeam && currentPlayer?.team !== turnTeam) return
     setConfirm({ open: true, char: c, action })
   }
 
@@ -54,7 +52,7 @@ export default function CharacterGrid({ socket }: any){
       {characters.map(c => {
         const cs = charStates.find((s:any)=>s.characterId===c.id)
         const state = cs?.state || 'available'
-        const disabled = state !== 'available' || (turnTeam && currentPlayer?.team !== turnTeam)
+        const disabled = state !== 'available' || (useStore.getState().phase && useStore.getState().phase.startsWith('PICK') && turnTeam && currentPlayer?.team !== turnTeam)
         const animKey = state === 'picked' ? `picked-${cs?.pickedTeam}` : state
         const variantKey = state === 'picked' ? (cs?.pickedTeam === 'A' ? 'pickedA' : 'pickedB') : state
         return (

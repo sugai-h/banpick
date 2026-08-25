@@ -77,20 +77,17 @@ export function getTeamBanVoteState(
   turnTeam: 'A' | 'B' | undefined,
   votes: Record<string, number>
 ) {
-  if (!turnTeam) {
-    return { ready: false, selected: [], pending: [] as string[] }
-  }
+  const activePlayers = turnTeam ? players.filter((player) => player.team === turnTeam) : players
 
-  const teamPlayers = players.filter((player) => player.team === turnTeam)
-  const pending = teamPlayers
+  const pending = activePlayers
     .filter((player) => !(player.id in votes))
     .map((player) => player.id)
-  const selected = teamPlayers
+  const selected = activePlayers
     .filter((player) => player.id in votes)
     .map((player) => votes[player.id])
 
   return {
-    ready: pending.length === 0 && teamPlayers.length > 0,
+    ready: activePlayers.length > 0 && pending.length === 0,
     selected: [...new Set(selected)],
     pending
   }
