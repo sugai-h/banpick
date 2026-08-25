@@ -5,6 +5,7 @@ import { useStore } from '../../store/useStore'
 import CharacterGrid from '../../components/CharacterGrid'
 import TeamPanel from '../../components/TeamPanel'
 import TurnPanel from '../../components/TurnPanel'
+import PhaseEditor from '../../components/PhaseEditor'
 
 function getSocketBackendUrl() {
   if (typeof window !== 'undefined') {
@@ -185,6 +186,10 @@ export default function RoomPage() {
               <button onClick={stopBanPick} disabled={!currentPlayer?.isHost} className="mt-2 py-1 px-2 bg-red-600 rounded disabled:opacity-50">中止</button>
             )}
           </div>
+          {/* フェーズ設定エディタ（lobby中に表示） */}
+          {phase === 'lobby' && (
+            <PhaseEditor socket={socket} isHost={!!currentPlayer?.isHost} />
+          )}
         </div>
         <div className="col-span-6">
           <CharacterGrid socket={socket} />

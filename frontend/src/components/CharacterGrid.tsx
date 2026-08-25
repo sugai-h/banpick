@@ -21,7 +21,7 @@ export default function CharacterGrid({ socket }: any){
     const state = charStates.find((s:any)=>s.characterId===c.id)?.state || 'available'
     if (state !== 'available') return
     const phase = useStore.getState().phase
-    const action: 'ban'|'pick' = phase && phase.startsWith('BAN') ? 'ban' : 'pick'
+    const action: 'ban'|'pick' = phase === 'BAN' ? 'ban' : 'pick'
 
     if (action === 'pick') {
       // PICKフェーズ: チームに所属していて、自分のチームのターンのみ操作可能
@@ -59,8 +59,8 @@ export default function CharacterGrid({ socket }: any){
         const cs = charStates.find((s:any)=>s.characterId===c.id)
         const state = cs?.state || 'available'
         const phase = useStore.getState().phase
-        const isBanPhase = phase && phase.startsWith('BAN')
-        const isPickPhase = phase && phase.startsWith('PICK')
+        const isBanPhase = phase === 'BAN'
+        const isPickPhase = phase === 'PICK_A' || phase === 'PICK_B'
         // BAN: 全員操作可能（チーム未所属でも可）
         // PICK: 自分のチームのターンのみ操作可能
         const disabled = state !== 'available' || (

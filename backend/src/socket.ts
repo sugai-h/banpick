@@ -1,6 +1,21 @@
 import { Server, Socket } from 'socket.io'
 import { query, getClient } from './db'
-import { getNextBanTeam, reconcileHostAssignment, resolveJoinPlayerState } from './roomRules'
+import { reconcileHostAssignment, resolveJoinPlayerState } from './roomRules'
+
+// ─── フェーズ定義型 ───────────────────────────────────────────────────────────
+// type: 'BAN' = 全員投票BAN, 'PICK_A' = 蒼チームPICK, 'PICK_B' = 紅チームPICK
+export type PhaseStep = { type: 'BAN' | 'PICK_A' | 'PICK_B'; count: number }
+
+// デフォルトフェーズ構成（変更可能）
+const DEFAULT_PHASE_SEQUENCE: PhaseStep[] = [
+  { type: 'BAN',    count: 0 },  // BAN: count は全員投票なので使用しない
+  { type: 'PICK_A', count: 1 },
+  { type: 'PICK_B', count: 2 },
+  { type: 'PICK_A', count: 2 },
+  { type: 'PICK_B', count: 1 },
+  { type: 'PICK_A', count: 2 },
+  { type: 'PICK_B', count: 2 },
+]
 
 type CharState = { characterId: number; state: 'available'|'banned'|'picked'; pickedBy?: string; pickedTeam?: 'A'|'B' }
 type Player = { id: string; name: string; socketId?: string; team?: 'A'|'B'; isHost?: boolean }
@@ -13,9 +28,9 @@ type RoomState = {
   remainingSelections?: number;
   timer?: any;
   remainingTime?: number;
-  phaseIndex?: number;
-  stepIndex?: number;
+  phaseIndex?: number;      // customPhases の現在インデックス
   pendingBanVotes?: Record<string, number>;
+  customPhases: PhaseStep[]; // ホストが設定したフェーズ列
 }
 
 const rooms = new Map<string, RoomState>()
@@ -31,7 +46,7 @@ async function initRoom(rawRoomId: string) {
   if (uuidRegex.test(rawRoomId)) {
     // Looks like a UUID — query directly
     roomRow = (await query(
-      'SELECT id, status, phase_index, step_index, remaining_selections FROM rooms WHERE id=$1',
+      'SELECT id, status, phase_index, remaining_selections, custom_phases FROM rooms WHERE id=$1',
       [rawRoomId]
     )).rows[0]
   }
@@ -39,7 +54,7 @@ async function initRoom(rawRoomId: string) {
   if (!roomRow) {
     // Treat rawRoomId as a PIN and resolve to the UUID row
     const byPin = (await query(
-      'SELECT id, status, phase_index, step_index, remaining_selections FROM rooms WHERE pin=$1',
+      'SELECT id, status, phase_index, remaining_selections, custom_phases FROM rooms WHERE pin=$1',
       [rawRoomId]
     )).rows[0]
     if (byPin) roomRow = byPin
@@ -68,10 +83,12 @@ async function initRoom(rawRoomId: string) {
     charStates: [],
     phase: roomRow.status || 'lobby',
     phaseIndex: roomRow.phase_index ?? 0,
-    stepIndex: roomRow.step_index ?? 0,
     remainingSelections: roomRow.remaining_selections ?? 0,
     remainingTime: 30,
-    pendingBanVotes: {}
+    pendingBanVotes: {},
+    customPhases: roomRow.custom_phases
+      ? JSON.parse(roomRow.custom_phases)
+      : [...DEFAULT_PHASE_SEQUENCE],
   }
 
   // ── Step 4: load players (use canonicalId for all DB queries) ────────────
@@ -123,7 +140,7 @@ function broadcastState(io: Server, roomId: string) {
     remainingTime: s.remainingTime,
     remainingSelections: s.remainingSelections,
     phaseIndex: s.phaseIndex,
-    stepIndex: s.stepIndex
+    customPhases: s.customPhases,
   })
 }
 
@@ -151,14 +168,14 @@ async function handleTimeout(io: Server, roomId: string) {
   if (!s) return
   const canonicalId = s.id   // always UUID
   try {
-    if (s.phase && s.phase.startsWith('BAN')) {
-      // skip: just advance turn
+    if (s.phase === 'BAN') {
+      // タイムアウト時はBAN票をそのまま確定して次へ進む
       io.to(canonicalId).emit('action:skipped', { reason: 'timeout', phase: s.phase })
       await advanceTurn(io, canonicalId)
       return
     }
-    // for PICK phases, perform a random pick for the current turnTeam
-    if (s.phase && s.phase.startsWith('PICK')) {
+    // PICK フェーズ: ランダムにPICK
+    if (s.phase === 'PICK_A' || s.phase === 'PICK_B') {
       const team = s.turnTeam
       if (!team) { await advanceTurn(io, canonicalId); return }
       const client = await getClient()
@@ -219,39 +236,48 @@ const PHASE_SEQUENCE = [
   { name: 'PICK3', steps: [{ team: 'A' as 'A'|'B', count: 2 }, { team: 'B' as 'A'|'B', count: 2 }] }
 ]
 
-async function setCurrentStep(io: Server, s: RoomState, phaseIndex: number, stepIndex: number) {
-  s.phaseIndex = phaseIndex
-  s.stepIndex = stepIndex
-  s.phase = PHASE_SEQUENCE[phaseIndex].name
+// フェーズインデックスから turnTeam を導出するヘルパー
+function phaseToTurnTeam(step: PhaseStep): 'A' | 'B' | undefined {
+  if (step.type === 'BAN') return undefined
+  return step.type === 'PICK_A' ? 'A' : 'B'
+}
 
-  if (s.phase === 'BAN') {
-    // BANフェーズ: turnTeam なし・全員が投票対象
+async function setCurrentPhase(s: RoomState, phaseIndex: number) {
+  const seq = s.customPhases
+  const step = seq[phaseIndex]
+  s.phaseIndex = phaseIndex
+
+  if (step.type === 'BAN') {
+    s.phase = 'BAN'
     s.turnTeam = undefined
-    s.remainingSelections = s.players.length
+    s.remainingSelections = s.players.length  // 全員が投票
   } else {
-    const step = PHASE_SEQUENCE[phaseIndex].steps[stepIndex]
-    s.turnTeam = step.team as 'A'|'B'
+    s.phase = step.type  // 'PICK_A' or 'PICK_B'
+    s.turnTeam = phaseToTurnTeam(step)
     s.remainingSelections = step.count
   }
-
   s.pendingBanVotes = {}
-  // persist – s.id is always the canonical UUID here
-  await query('UPDATE rooms SET phase_index=$1, step_index=$2, status=$3, remaining_selections=$4 WHERE id=$5', [phaseIndex, stepIndex, s.phase, s.remainingSelections, s.id])
+
+  await query(
+    'UPDATE rooms SET phase_index=$1, status=$2, remaining_selections=$3 WHERE id=$4',
+    [phaseIndex, s.phase, s.remainingSelections, s.id]
+  )
 }
 
 async function advanceTurn(io: Server, roomId: string) {
-  // roomId here must always be the canonical UUID (s.id); look up via UUID key
   const s = rooms.get(roomId)
   if (!s) return
-  const canonicalId = s.id   // redundant guard – s.id is always UUID
+  const canonicalId = s.id
   s.pendingBanVotes = {}
+  const seq = s.customPhases
 
-  // BANフェーズは全員投票完了時点で呼ばれる → 無条件で次フェーズ(PICK1)へ
-  // PICK フェーズは remainingSelections を消費しながら step を進める
-
+  // BAN フェーズ完了 → 次のフェーズへ即遷移
   if (s.phase === 'BAN') {
-    // BANは1フェーズのみ → 即 phaseIndex=1 (PICK1), stepIndex=0 へ
-    await setCurrentStep(io, s, 1, 0)
+    const nextIndex = (s.phaseIndex ?? 0) + 1
+    if (nextIndex >= seq.length) {
+      return finishGame(io, s, canonicalId)
+    }
+    await setCurrentPhase(s, nextIndex)
     s.remainingTime = 30
     io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
     startTimer(io, canonicalId)
@@ -265,7 +291,7 @@ async function advanceTurn(io: Server, roomId: string) {
     await query('UPDATE rooms SET remaining_selections=$1 WHERE id=$2', [s.remainingSelections, canonicalId])
   }
 
-  // まだ残りがあれば同じ step・同じ turnTeam を継続
+  // まだ残りがあれば同じフェーズを継続
   if ((s.remainingSelections ?? 0) > 0) {
     s.remainingTime = 30
     io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
@@ -273,28 +299,25 @@ async function advanceTurn(io: Server, roomId: string) {
     return
   }
 
-  // 次の step へ
-  let nextPhase = (s.phaseIndex ?? 1)
-  let nextStep = (s.stepIndex ?? 0) + 1
-  if (nextStep >= PHASE_SEQUENCE[nextPhase].steps.length) {
-    nextPhase++
-    nextStep = 0
+  // 次のフェーズへ
+  const nextIndex = (s.phaseIndex ?? 0) + 1
+  if (nextIndex >= seq.length) {
+    return finishGame(io, s, canonicalId)
   }
-  if (nextPhase >= PHASE_SEQUENCE.length) {
-    // 全フェーズ完了
-    s.phase = 'finished'
-    s.turnTeam = undefined
-    s.remainingSelections = 0
-    clearInterval(s.timer)
-    await query('UPDATE rooms SET status=$1 WHERE id=$2', ['finished', canonicalId])
-    io.to(canonicalId).emit('phase:finished', {})
-    broadcastState(io, canonicalId)
-    return
-  }
-  await setCurrentStep(io, s, nextPhase, nextStep)
+  await setCurrentPhase(s, nextIndex)
   s.remainingTime = 30
   io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
   startTimer(io, canonicalId)
+  broadcastState(io, canonicalId)
+}
+
+async function finishGame(io: Server, s: RoomState, canonicalId: string) {
+  s.phase = 'finished'
+  s.turnTeam = undefined
+  s.remainingSelections = 0
+  clearInterval(s.timer)
+  await query('UPDATE rooms SET status=$1 WHERE id=$2', ['finished', canonicalId])
+  io.to(canonicalId).emit('phase:finished', {})
   broadcastState(io, canonicalId)
 }
 
@@ -370,14 +393,15 @@ export function createSockets(io: Server) {
       const s = await initRoom(roomId)
       if (!s) return socket.emit('error', { message: 'no_room' })
       const canonicalId = s.id
-      // only host can start
       const p = s.players.find(p => p.id === playerId)
       if (!p || !p.isHost) return socket.emit('error', { message: 'not_host' })
       if (s.phase !== 'lobby') return socket.emit('error', { message: 'invalid_phase' })
-      // initialize sequence
-      await setCurrentStep(io, s, 0, 0)
-      // persist status
-      await query('UPDATE rooms SET status=$1 WHERE id=$2', [s.phase, canonicalId])
+      // フェーズが1つも設定されていなければデフォルトを使用
+      if (!s.customPhases.length) {
+        s.customPhases = [...DEFAULT_PHASE_SEQUENCE]
+        await query('UPDATE rooms SET custom_phases=$1 WHERE id=$2', [JSON.stringify(s.customPhases), canonicalId])
+      }
+      await setCurrentPhase(s, 0)
       startTimer(io, canonicalId)
       broadcastState(io, canonicalId)
     })
@@ -388,14 +412,12 @@ export function createSockets(io: Server) {
       const canonicalId = s.id
       const p = s.players.find(p => p.id === playerId)
       if (!p || !p.isHost) return socket.emit('error', { message: 'not_host' })
-      // stop sequence and reset to lobby
       s.phase = 'lobby'
       s.phaseIndex = 0
-      s.stepIndex = 0
       s.turnTeam = undefined
       s.remainingSelections = 0
       clearInterval(s.timer)
-      await query('UPDATE rooms SET status=$1, phase_index=$2, step_index=$3, remaining_selections=$4 WHERE id=$5', ['lobby', 0, 0, 0, canonicalId])
+      await query('UPDATE rooms SET status=$1, phase_index=$2, remaining_selections=$3 WHERE id=$4', ['lobby', 0, 0, canonicalId])
       io.to(canonicalId).emit('action:stopped', { by: playerId })
       broadcastState(io, canonicalId)
     })
@@ -543,6 +565,26 @@ export function createSockets(io: Server) {
         if (roomRow) s.remainingSelections = roomRow.remaining_selections
         broadcastState(io, canonicalId)
         await advanceTurn(io, canonicalId)
+      } catch(e) { console.error(e); socket.emit('error', { message: 'server_error' }) }
+    })
+
+    // ホストがフェーズ構成を更新するイベント
+    socket.on('setPhaseSequence', async ({ roomId, playerId, phases }: any) => {
+      try {
+        const s = await initRoom(roomId)
+        if (!s) return socket.emit('error', { message: 'no_room' })
+        const p = s.players.find(p => p.id === playerId)
+        if (!p || !p.isHost) return socket.emit('error', { message: 'not_host' })
+        if (s.phase !== 'lobby') return socket.emit('error', { message: 'cannot_edit_during_game' })
+        // 検証: phases は PhaseStep[] であること
+        if (!Array.isArray(phases) || phases.length === 0) return socket.emit('error', { message: 'invalid_phases' })
+        for (const ph of phases) {
+          if (!['BAN','PICK_A','PICK_B'].includes(ph.type)) return socket.emit('error', { message: 'invalid_phase_type' })
+          if (ph.type !== 'BAN' && (typeof ph.count !== 'number' || ph.count < 1)) return socket.emit('error', { message: 'invalid_phase_count' })
+        }
+        s.customPhases = phases
+        await query('UPDATE rooms SET custom_phases=$1 WHERE id=$2', [JSON.stringify(phases), s.id])
+        broadcastState(io, s.id)
       } catch(e) { console.error(e); socket.emit('error', { message: 'server_error' }) }
     })
 

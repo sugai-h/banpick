@@ -153,4 +153,26 @@ const io = new IOServer(server, { cors: { origin: allowedOrigin } })
 createSockets(io)
 
 const PORT = process.env.PORT || 4000
-server.listen(PORT, () => console.log(`Backend listening ${PORT}`))
+
+// 起動時に未適用マイグレーションを自動実行
+import fs from 'fs'
+import path from 'path'
+import { runSqlFile } from './db'
+
+async function runMigrations() {
+  try {
+    const migrationsDir = path.join(__dirname, '..', 'migrations')
+    if (!fs.existsSync(migrationsDir)) return
+    const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort()
+    for (const f of files) {
+      await runSqlFile(path.join(migrationsDir, f))
+    }
+    console.log('Migrations applied.')
+  } catch (err) {
+    console.error('Migration error (non-fatal):', err)
+  }
+}
+
+runMigrations().then(() => {
+  server.listen(PORT, () => console.log(`Backend listening ${PORT}`))
+})
