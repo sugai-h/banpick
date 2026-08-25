@@ -6,6 +6,7 @@ import CharacterGrid from '../../components/CharacterGrid'
 import TeamPanel from '../../components/TeamPanel'
 import TurnPanel from '../../components/TurnPanel'
 import PhaseEditor from '../../components/PhaseEditor'
+import BanPickStatus from '../../components/BanPickStatus'
 
 function getSocketBackendUrl() {
   if (typeof window !== 'undefined') {
@@ -193,6 +194,7 @@ export default function RoomPage() {
         </div>
         <div className="col-span-6">
           <CharacterGrid socket={socket} />
+          <BanPickStatus />
         </div>
         <div className="col-span-3">
           <TurnPanel />
