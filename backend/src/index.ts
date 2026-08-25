@@ -160,17 +160,20 @@ import path from 'path'
 import { runSqlFile } from './db'
 
 async function runMigrations() {
-  try {
-    const migrationsDir = path.join(__dirname, '..', 'migrations')
-    if (!fs.existsSync(migrationsDir)) return
-    const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort()
-    for (const f of files) {
+  const migrationsDir = path.join(__dirname, '..', 'migrations')
+  if (!fs.existsSync(migrationsDir)) return
+  const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort()
+  for (const f of files) {
+    try {
+      console.log(`Applying migration: ${f}`)
       await runSqlFile(path.join(migrationsDir, f))
+      console.log(`  ✓ ${f}`)
+    } catch (err: any) {
+      // 冪等なSQLでも稀にエラーになる場合はスキップして続行
+      console.warn(`  ⚠ ${f} skipped (non-fatal):`, err?.message ?? err)
     }
-    console.log('Migrations applied.')
-  } catch (err) {
-    console.error('Migration error (non-fatal):', err)
   }
+  console.log('All migrations processed.')
 }
 
 runMigrations().then(() => {
