@@ -71,3 +71,38 @@ export function resolveJoinPlayerState(
     isHost
   }
 }
+
+export function getTeamBanVoteState(
+  players: RoomPlayer[],
+  turnTeam: 'A' | 'B' | undefined,
+  votes: Record<string, number>
+) {
+  if (!turnTeam) {
+    return { ready: false, selected: [], pending: [] as string[] }
+  }
+
+  const teamPlayers = players.filter((player) => player.team === turnTeam)
+  const pending = teamPlayers
+    .filter((player) => !(player.id in votes))
+    .map((player) => player.id)
+  const selected = teamPlayers
+    .filter((player) => player.id in votes)
+    .map((player) => votes[player.id])
+
+  return {
+    ready: pending.length === 0 && teamPlayers.length > 0,
+    selected: [...new Set(selected)],
+    pending
+  }
+}
+
+export function getNextTeam(team?: 'A' | 'B') {
+  if (team === 'A') return 'B'
+  if (team === 'B') return 'A'
+  return undefined
+}
+
+export function getNextBanTeam(team?: 'A' | 'B') {
+  if (team === 'A') return 'B'
+  return undefined
+}

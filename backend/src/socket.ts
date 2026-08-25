@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io'
 import { query, getClient } from './db'
-import { reconcileHostAssignment, resolveJoinPlayerState } from './roomRules'
+import { getNextBanTeam, reconcileHostAssignment, resolveJoinPlayerState } from './roomRules'
 
 type CharState = { characterId: number; state: 'available'|'banned'|'picked'; pickedBy?: string; pickedTeam?: 'A'|'B' }
 type Player = { id: string; name: string; socketId?: string; team?: 'A'|'B'; isHost?: boolean }
@@ -15,6 +15,7 @@ type RoomState = {
   remainingTime?: number;
   phaseIndex?: number;
   stepIndex?: number;
+  pendingBanVotes?: Record<string, number>;
 }
 
 const rooms = new Map<string, RoomState>()
@@ -22,7 +23,7 @@ const rooms = new Map<string, RoomState>()
 async function initRoom(roomId: string) {
   if (rooms.has(roomId)) return rooms.get(roomId)!
   // load players and charStates from DB
-  const st: RoomState = { id: roomId, players: [], charStates: [], phase: 'lobby', remainingTime: 30 }
+  const st: RoomState = { id: roomId, players: [], charStates: [], phase: 'lobby', remainingTime: 30, pendingBanVotes: {} }
   // Only query by UUID if the provided roomId looks like a UUID to avoid casting errors
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   let roomRow: any = undefined
@@ -171,6 +172,7 @@ async function setCurrentStep(io: Server, s: RoomState, phaseIndex: number, step
   s.phase = PHASE_SEQUENCE[phaseIndex].name
   s.turnTeam = PHASE_SEQUENCE[phaseIndex].steps[stepIndex].team as 'A'|'B'
   s.remainingSelections = PHASE_SEQUENCE[phaseIndex].steps[stepIndex].count
+  s.pendingBanVotes = {}
   // persist
   await query('UPDATE rooms SET phase_index=$1, step_index=$2, status=$3, remaining_selections=$4 WHERE id=$5', [phaseIndex, stepIndex, s.phase, s.remainingSelections, s.id])
 }
@@ -178,6 +180,25 @@ async function setCurrentStep(io: Server, s: RoomState, phaseIndex: number, step
 async function advanceTurn(io: Server, roomId: string) {
   const s = rooms.get(roomId)
   if (!s) return
+  s.pendingBanVotes = {}
+
+  if (s.phase && s.phase.startsWith('BAN')) {
+    const nextTeam = getNextBanTeam(s.turnTeam)
+    if (nextTeam) {
+      s.turnTeam = nextTeam
+      s.remainingSelections = 0
+      s.remainingTime = 30
+      io.to(roomId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
+      startTimer(io, roomId)
+      return
+    }
+    await setCurrentStep(io, s, 1, 0)
+    s.remainingTime = 30
+    io.to(roomId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
+    startTimer(io, roomId)
+    return
+  }
+
   // decrease remainingSelections if present
   if (s.remainingSelections && s.remainingSelections > 0) {
     s.remainingSelections!--
@@ -315,25 +336,85 @@ export function createSockets(io: Server) {
         if (!s) return socket.emit('error', { message: 'no_room' })
         const canonicalId = s.id
         console.debug('[requestAction] canonicalId=', canonicalId, 'incomingRoomId=', roomId, 'characterId=', characterId, 'playerId=', playerId, 'action=', actionType)
+        const player = s.players.find(p => p.id === playerId)
+        if (!player) return socket.emit('error', { message: 'not_your_turn' })
+
+        if (actionType === 'ban') {
+          if (s.phase !== 'BAN') return socket.emit('error', { message: 'invalid_phase_for_action' })
+          if (player.team !== s.turnTeam) return socket.emit('error', { message: 'not_your_turn' })
+        }
+
+        if (actionType === 'pick') {
+          if (s.phase === 'BAN') return socket.emit('error', { message: 'invalid_phase_for_action' })
+          if (s.turnTeam && player.team !== s.turnTeam) return socket.emit('error', { message: 'not_your_turn' })
+          if (!player.team) return socket.emit('error', { message: 'no_team_assigned' })
+        }
         // verify turn
         if (s.turnTeam && !s.players.find(p => p.id === playerId && p.team === s.turnTeam)) {
           return socket.emit('error', { message: 'not_your_turn' })
         }
-        // verify phase allows this action
-        if (actionType === 'ban' && s.phase !== 'BAN') {
-          return socket.emit('error', { message: 'invalid_phase_for_action' })
-        }
-        if (actionType === 'pick' && s.phase === 'BAN') {
-          return socket.emit('error', { message: 'invalid_phase_for_action' })
-        }
-        // ensure player has a team when picking
-        if (actionType === 'pick') {
-          const player = s.players.find(p => p.id === playerId)
-          if (!player || !player.team) return socket.emit('error', { message: 'no_team_assigned' })
-        }
         const client = await getClient()
         try {
           await client.query('BEGIN')
+
+          if (actionType === 'ban' && s.phase === 'BAN' && s.turnTeam) {
+            const teamPlayers = s.players.filter((player) => player.team === s.turnTeam)
+            if (!teamPlayers.length) {
+              await client.query('ROLLBACK')
+              client.release()
+              return socket.emit('error', { message: 'not_your_turn' })
+            }
+
+            s.pendingBanVotes ??= {}
+            s.pendingBanVotes[playerId] = characterId
+
+            const teamVoteIds = teamPlayers.map((player) => player.id)
+            const votedAll = teamVoteIds.every((id) => Object.prototype.hasOwnProperty.call(s.pendingBanVotes, id))
+
+            if (!votedAll) {
+              await client.query('ROLLBACK')
+              client.release()
+              broadcastState(io, s.id)
+              return
+            }
+
+            const selectedCharacters = Array.from(new Set(Object.values(s.pendingBanVotes)))
+            for (const selectedCharacterId of selectedCharacters) {
+              const rs = await client.query('SELECT state FROM room_char_states WHERE room_id=$1 AND character_id=$2 FOR UPDATE', [canonicalId, selectedCharacterId])
+              if (!rs.rows.length) {
+                await client.query('ROLLBACK')
+                client.release()
+                return socket.emit('error', { message: 'invalid_character' })
+              }
+              if (rs.rows[0].state !== 'available') {
+                await client.query('ROLLBACK')
+                client.release()
+                return socket.emit('error', { message: 'invalid_character' })
+              }
+              await client.query('UPDATE room_char_states SET state=$1 WHERE room_id=$2 AND character_id=$3', ['banned', canonicalId, selectedCharacterId])
+            }
+
+            s.pendingBanVotes = {}
+            s.remainingSelections = 0
+            await client.query('UPDATE rooms SET remaining_selections = 0 WHERE id=$1', [canonicalId])
+            await client.query('COMMIT')
+            client.release()
+            for (const selectedCharacterId of selectedCharacters) {
+              const cs = s.charStates.find(c => c.characterId === selectedCharacterId)
+              if (cs) {
+                cs.state = 'banned'
+                cs.pickedBy = undefined
+                cs.pickedTeam = undefined
+              }
+            }
+            io.to(s.id).emit('action:confirmed', { playerId, actionType, characterId: selectedCharacters })
+            const roomRow = (await query('SELECT remaining_selections FROM rooms WHERE id=$1', [s.id])).rows[0]
+            if (roomRow) s.remainingSelections = roomRow.remaining_selections
+            broadcastState(io, s.id)
+            await advanceTurn(io, s.id)
+            return
+          }
+
           const rs = await client.query('SELECT state FROM room_char_states WHERE room_id=$1 AND character_id=$2 FOR UPDATE', [canonicalId, characterId])
           if (!rs.rows.length) {
             console.error('[requestAction] no room_char_states row', { room_id: canonicalId, character_id: characterId })
