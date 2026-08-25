@@ -190,15 +190,7 @@ async function handleTimeout(io: Server, roomId: string) {
           return
         }
         const characterId = rs.rows[0].character_id
-        // ensure team not full
-        const pickedCountRes = await client.query('SELECT COUNT(*) FROM room_char_states WHERE room_id=$1 AND state=$2 AND picked_team=$3', [canonicalId, 'picked', team])
-        const pickedCount = parseInt(pickedCountRes.rows[0].count)
-        if (pickedCount >= 3) {
-          await client.query('ROLLBACK')
-          client.release()
-          await advanceTurn(io, canonicalId)
-          return
-        }
+        // チームフル制限なし（フェーズ設定で枚数を管理するため上限チェック不要）
         await client.query('UPDATE room_char_states SET state=$1, picked_by=$2, picked_team=$3 WHERE room_id=$4 AND character_id=$5', ['picked', null, team, canonicalId, characterId])
         await client.query('UPDATE rooms SET remaining_selections = GREATEST(0, remaining_selections - 1) WHERE id=$1', [canonicalId])
         await client.query('COMMIT')
@@ -533,13 +525,7 @@ export function createSockets(io: Server) {
           if (actionType === 'ban') {
             await client.query('UPDATE room_char_states SET state=$1 WHERE room_id=$2 AND character_id=$3', ['banned', canonicalId, characterId])
           } else if (actionType === 'pick') {
-            const pickedCountRes = await client.query('SELECT COUNT(*) FROM room_char_states WHERE room_id=$1 AND state=$2 AND picked_team=$3', [canonicalId, 'picked', s.turnTeam])
-            const pickedCount = parseInt(pickedCountRes.rows[0].count)
-            if (pickedCount >= 3) {
-              await client.query('ROLLBACK')
-              client.release()
-              return socket.emit('error', { message: 'team_full' })
-            }
+            // チームフル制限なし（フェーズ設定で枚数を管理）
             await client.query('UPDATE room_char_states SET state=$1, picked_by=$2, picked_team=$3 WHERE room_id=$4 AND character_id=$5', ['picked', playerId, s.turnTeam, canonicalId, characterId])
           }
           // decrement remaining_selections
