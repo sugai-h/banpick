@@ -22,7 +22,13 @@ export default function CharacterGrid({ socket }: any){
     if (state !== 'available') return
     const phase = useStore.getState().phase
     const action: 'ban'|'pick' = phase && phase.startsWith('BAN') ? 'ban' : 'pick'
-    if (action === 'pick' && turnTeam && currentPlayer?.team !== turnTeam) return
+
+    if (action === 'pick') {
+      // PICKフェーズ: チームに所属していて、自分のチームのターンのみ操作可能
+      if (!currentPlayer?.team) return
+      if (turnTeam !== undefined && turnTeam !== null && currentPlayer.team !== turnTeam) return
+    }
+    // BANフェーズ: チーム問わず全員が操作可能（チーム未所属でも可）
     setConfirm({ open: true, char: c, action })
   }
 
@@ -52,7 +58,17 @@ export default function CharacterGrid({ socket }: any){
       {characters.map(c => {
         const cs = charStates.find((s:any)=>s.characterId===c.id)
         const state = cs?.state || 'available'
-        const disabled = state !== 'available' || (useStore.getState().phase && useStore.getState().phase.startsWith('PICK') && turnTeam && currentPlayer?.team !== turnTeam)
+        const phase = useStore.getState().phase
+        const isBanPhase = phase && phase.startsWith('BAN')
+        const isPickPhase = phase && phase.startsWith('PICK')
+        // BAN: 全員操作可能（チーム未所属でも可）
+        // PICK: 自分のチームのターンのみ操作可能
+        const disabled = state !== 'available' || (
+          isPickPhase && (
+            !currentPlayer?.team ||
+            (turnTeam !== undefined && turnTeam !== null && currentPlayer.team !== turnTeam)
+          )
+        )
         const animKey = state === 'picked' ? `picked-${cs?.pickedTeam}` : state
         const variantKey = state === 'picked' ? (cs?.pickedTeam === 'A' ? 'pickedA' : 'pickedB') : state
         return (

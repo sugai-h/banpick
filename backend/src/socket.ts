@@ -209,14 +209,14 @@ async function handleTimeout(io: Server, roomId: string) {
 }
 
 const PHASE_SEQUENCE = [
-  // Phase1 BAN: A 2, B 2
-  { name: 'BAN', steps: [{team: 'A', count:2}, {team:'B', count:2}] },
+  // Phase1 BAN: 全員が1回ずつ投票 → 1フェーズで完了
+  { name: 'BAN', steps: [{ team: undefined as 'A'|'B'|undefined, count: 0 }] },
   // Phase2 PICK: A1 B2
-  { name: 'PICK1', steps: [{team:'A', count:1}, {team:'B', count:2}] },
+  { name: 'PICK1', steps: [{ team: 'A' as 'A'|'B', count: 1 }, { team: 'B' as 'A'|'B', count: 2 }] },
   // Phase3 PICK: A2 B1
-  { name: 'PICK2', steps: [{team:'A', count:2}, {team:'B', count:1}] },
-  // Phase4 PICK: remaining (fill to 3 per team)
-  { name: 'PICK3', steps: [{team:'A', count:2}, {team:'B', count:2}] }
+  { name: 'PICK2', steps: [{ team: 'A' as 'A'|'B', count: 2 }, { team: 'B' as 'A'|'B', count: 1 }] },
+  // Phase4 PICK: A2 B2
+  { name: 'PICK3', steps: [{ team: 'A' as 'A'|'B', count: 2 }, { team: 'B' as 'A'|'B', count: 2 }] }
 ]
 
 async function setCurrentStep(io: Server, s: RoomState, phaseIndex: number, stepIndex: number) {
@@ -225,11 +225,13 @@ async function setCurrentStep(io: Server, s: RoomState, phaseIndex: number, step
   s.phase = PHASE_SEQUENCE[phaseIndex].name
 
   if (s.phase === 'BAN') {
+    // BANフェーズ: turnTeam なし・全員が投票対象
     s.turnTeam = undefined
-    s.remainingSelections = Math.max(0, s.players.length)
+    s.remainingSelections = s.players.length
   } else {
-    s.turnTeam = PHASE_SEQUENCE[phaseIndex].steps[stepIndex].team as 'A'|'B'
-    s.remainingSelections = PHASE_SEQUENCE[phaseIndex].steps[stepIndex].count
+    const step = PHASE_SEQUENCE[phaseIndex].steps[stepIndex]
+    s.turnTeam = step.team as 'A'|'B'
+    s.remainingSelections = step.count
   }
 
   s.pendingBanVotes = {}
@@ -244,40 +246,48 @@ async function advanceTurn(io: Server, roomId: string) {
   const canonicalId = s.id   // redundant guard – s.id is always UUID
   s.pendingBanVotes = {}
 
-  if (s.phase && s.phase.startsWith('BAN')) {
+  // BANフェーズは全員投票完了時点で呼ばれる → 無条件で次フェーズ(PICK1)へ
+  // PICK フェーズは remainingSelections を消費しながら step を進める
+
+  if (s.phase === 'BAN') {
+    // BANは1フェーズのみ → 即 phaseIndex=1 (PICK1), stepIndex=0 へ
     await setCurrentStep(io, s, 1, 0)
+    s.remainingTime = 30
+    io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
+    startTimer(io, canonicalId)
+    broadcastState(io, canonicalId)
+    return
+  }
+
+  // PICK フェーズ: remainingSelections を1つ消費
+  if ((s.remainingSelections ?? 0) > 0) {
+    s.remainingSelections!--
+    await query('UPDATE rooms SET remaining_selections=$1 WHERE id=$2', [s.remainingSelections, canonicalId])
+  }
+
+  // まだ残りがあれば同じ step・同じ turnTeam を継続
+  if ((s.remainingSelections ?? 0) > 0) {
     s.remainingTime = 30
     io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
     startTimer(io, canonicalId)
     return
   }
 
-  // decrease remainingSelections if present
-  if (s.remainingSelections && s.remainingSelections > 0) {
-    s.remainingSelections!--
-    await query('UPDATE rooms SET remaining_selections=$1 WHERE id=$2', [s.remainingSelections, canonicalId])
-  }
-  // if still selections left for this step, keep same team
-  if (s.remainingSelections && s.remainingSelections > 0) {
-    s.remainingTime = 30
-    io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
-    startTimer(io, canonicalId)
-    return
-  }
-  // move to next step
-  let nextPhase = (s.phaseIndex ?? 0)
+  // 次の step へ
+  let nextPhase = (s.phaseIndex ?? 1)
   let nextStep = (s.stepIndex ?? 0) + 1
   if (nextStep >= PHASE_SEQUENCE[nextPhase].steps.length) {
     nextPhase++
     nextStep = 0
   }
   if (nextPhase >= PHASE_SEQUENCE.length) {
-    // finished
+    // 全フェーズ完了
     s.phase = 'finished'
     s.turnTeam = undefined
     s.remainingSelections = 0
     clearInterval(s.timer)
-    io.to(canonicalId).emit('phase:finished', { })
+    await query('UPDATE rooms SET status=$1 WHERE id=$2', ['finished', canonicalId])
+    io.to(canonicalId).emit('phase:finished', {})
     broadcastState(io, canonicalId)
     return
   }
@@ -285,6 +295,7 @@ async function advanceTurn(io: Server, roomId: string) {
   s.remainingTime = 30
   io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
   startTimer(io, canonicalId)
+  broadcastState(io, canonicalId)
 }
 
 export function createSockets(io: Server) {
@@ -397,16 +408,22 @@ export function createSockets(io: Server) {
         const canonicalId = s.id
         console.debug('[requestAction] canonicalId=', canonicalId, 'incomingRoomId=', roomId, 'characterId=', characterId, 'playerId=', playerId, 'action=', actionType)
         const player = s.players.find(p => p.id === playerId)
-        if (!player) return socket.emit('error', { message: 'not_your_turn' })
+        if (!player) return socket.emit('error', { message: 'player_not_found' })
 
         if (actionType === 'ban') {
+          // BANフェーズ: 全プレイヤーが投票権を持つ
           if (s.phase !== 'BAN') return socket.emit('error', { message: 'invalid_phase_for_action' })
+          // チーム未所属でも BAN は可能
         }
 
         if (actionType === 'pick') {
+          // PICKフェーズ: チームに所属していて、自分のチームのターンであれば誰でも操作可能
           if (s.phase === 'BAN') return socket.emit('error', { message: 'invalid_phase_for_action' })
           if (!player.team) return socket.emit('error', { message: 'no_team_assigned' })
-          if (s.turnTeam && player.team !== s.turnTeam) return socket.emit('error', { message: 'not_your_turn' })
+          // turnTeam が設定されていて、自分のチームと違う場合のみ弾く
+          if (s.turnTeam !== undefined && s.turnTeam !== null && player.team !== s.turnTeam) {
+            return socket.emit('error', { message: 'not_your_turn' })
+          }
         }
         if (actionType === 'ban' && s.phase === 'BAN' && Object.prototype.hasOwnProperty.call(s.pendingBanVotes ?? {}, playerId)) {
           return socket.emit('error', { message: 'already_voted' })
