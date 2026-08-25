@@ -2,7 +2,151 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=M+PLUS+1p:wght@400;700&display=swap');
+
 html, body, #__next { height: 100%; }
 
-/* basic dark background */
-body { @apply bg-gray-900 text-white }
+body {
+  background-color: #04070f;
+  color: #c0d8f0;
+  font-family: 'Rajdhani', 'M PLUS 1p', sans-serif;
+  overflow-x: hidden;
+}
+
+/* ── HUD ベースパネル ── */
+.hud-panel {
+  background: linear-gradient(135deg, #080e1c 0%, #060a14 100%);
+  border: 1px solid #1a2a4a;
+  position: relative;
+  overflow: hidden;
+}
+.hud-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,212,255,0.015) 2px,
+    rgba(0,212,255,0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+.hud-panel > * { position: relative; z-index: 1; }
+
+/* ── コーナー装飾 ── */
+.hud-corner::before,
+.hud-corner::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: #00d4ff;
+  border-style: solid;
+}
+.hud-corner::before { top: 0; left: 0; border-width: 1px 0 0 1px; }
+.hud-corner::after  { bottom: 0; right: 0; border-width: 0 1px 1px 0; }
+
+/* ── セクションタイトル ── */
+.hud-title {
+  font-size: 0.65rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #00d4ff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hud-title::before {
+  content: '';
+  display: inline-block;
+  width: 16px;
+  height: 1px;
+  background: #00d4ff;
+}
+
+/* ── キャラカード六角形 ── */
+.hex-clip {
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+}
+
+/* ── グロウボタン ── */
+.btn-cyan {
+  background: linear-gradient(90deg, #0055aa, #0088cc);
+  border: 1px solid #00d4ff;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+.btn-cyan:hover:not(:disabled) {
+  box-shadow: 0 0 12px rgba(0,212,255,0.6);
+  background: linear-gradient(90deg, #0077cc, #00aaee);
+}
+.btn-cyan:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-gold {
+  background: linear-gradient(90deg, #5a3a00, #8a6010);
+  border: 1px solid #c8a84b;
+  color: #f0d080;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: all 0.2s;
+}
+.btn-gold:hover:not(:disabled) {
+  box-shadow: 0 0 12px rgba(200,168,75,0.6);
+}
+.btn-gold:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-danger {
+  background: linear-gradient(90deg, #5a0000, #8a1010);
+  border: 1px solid #e02020;
+  color: #ffaaaa;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: all 0.2s;
+}
+.btn-danger:hover:not(:disabled) {
+  box-shadow: 0 0 12px rgba(224,32,32,0.6);
+}
+.btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── タイマーバー ── */
+.timer-bar {
+  height: 3px;
+  background: linear-gradient(90deg, #00d4ff, #0055aa);
+  box-shadow: 0 0 6px rgba(0,212,255,0.6);
+  transition: width 0.5s linear;
+}
+
+/* ── ロールバッジ ── */
+.role-badge {
+  font-size: 0.6rem;
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.role-fighter  { background: rgba(239,68,68,0.2);  border: 1px solid #ef4444; color: #fca5a5; }
+.role-mage     { background: rgba(139,92,246,0.2); border: 1px solid #8b5cf6; color: #c4b5fd; }
+.role-assassin { background: rgba(234,179,8,0.2);  border: 1px solid #eab308; color: #fde047; }
+.role-support  { background: rgba(34,197,94,0.2);  border: 1px solid #22c55e; color: #86efac; }
+.role-tank     { background: rgba(59,130,246,0.2); border: 1px solid #3b82f6; color: #93c5fd; }
+.role-gunner   { background: rgba(249,115,22,0.2); border: 1px solid #f97316; color: #fdba74; }
+.role-sprinter { background: rgba(20,184,166,0.2); border: 1px solid #14b8a6; color: #5eead4; }
+.role-default  { background: rgba(100,116,139,0.2);border: 1px solid #64748b; color: #94a3b8; }
+
+/* ── スクロールバー ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #04070f; }
+::-webkit-scrollbar-thumb { background: #1a2a4a; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #00d4ff44; }

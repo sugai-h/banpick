@@ -11,48 +11,46 @@ export default function BanPickStatus() {
     fetch('/api/characters').then(r => r.json()).then(j => setCharacters(j.characters ?? []))
   }, [])
 
-  function charName(id: number) {
-    return characters.find(c => c.id === id)?.name ?? `#${id}`
-  }
-  function charRole(id: number) {
-    return characters.find(c => c.id === id)?.role ?? ''
-  }
-  function playerName(playerId: string | undefined) {
-    if (!playerId) return ''
-    return players.find(p => p.id === playerId)?.name ?? ''
-  }
+  const charName   = (id: number) => characters.find(c => c.id === id)?.name  ?? `#${id}`
+  const charRole   = (id: number) => characters.find(c => c.id === id)?.role  ?? ''
+  const playerName = (pid?: string) => pid ? (players.find(p => p.id === pid)?.name ?? '') : ''
 
-  const banned = charStates.filter(c => c.state === 'banned')
+  const banned  = charStates.filter(c => c.state === 'banned')
   const pickedA = charStates.filter(c => c.state === 'picked' && c.pickedTeam === 'A')
   const pickedB = charStates.filter(c => c.state === 'picked' && c.pickedTeam === 'B')
 
   if (banned.length === 0 && pickedA.length === 0 && pickedB.length === 0) return null
 
+  const Chip = ({ name, sub, color }: { name: string; sub?: string; color: string }) => (
+    <div className={`flex items-center gap-1.5 px-2 py-1 rounded-sm border text-xs hud-panel`}
+      style={{ borderColor: color + '60' }}>
+      <span className="w-5 h-5 rounded-sm flex items-center justify-center font-black text-[10px] shrink-0"
+        style={{ backgroundColor: color + '30', color }}>
+        {name[0]}
+      </span>
+      <div className="min-w-0">
+        <div className="font-bold truncate" style={{ color: '#c0d8f0' }}>{name}</div>
+        {sub && <div className="text-[9px] truncate" style={{ color }}>{sub}</div>}
+      </div>
+    </div>
+  )
+
   return (
     <div className="mt-3 space-y-2">
       {/* BAN済み */}
       {banned.length > 0 && (
-        <div className="bg-gray-800 rounded p-2">
-          <div className="text-xs font-bold text-red-400 mb-1.5 uppercase tracking-wide">
-            BAN済み ({banned.length})
+        <div className="hud-panel rounded-sm p-2">
+          <div className="hud-title mb-1.5" style={{ color: '#e02020' }}>
+            BANNED ({banned.length})
           </div>
           <div className="flex flex-wrap gap-1.5">
             <AnimatePresence>
               {banned.map(c => (
-                <motion.div
-                  key={c.characterId}
+                <motion.div key={c.characterId}
                   initial={{ opacity: 0, scale: 0.7 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-                  className="flex items-center gap-1 px-2 py-1 rounded bg-red-900/60 border border-red-700 text-xs"
-                >
-                  <span className="w-5 h-5 rounded bg-red-800 flex items-center justify-center font-bold text-red-200 text-[10px] shrink-0">
-                    {charName(c.characterId)[0]}
-                  </span>
-                  <span className="text-red-100 font-semibold">{charName(c.characterId)}</span>
-                  {charRole(c.characterId) && (
-                    <span className="text-red-400 hidden sm:inline">{charRole(c.characterId)}</span>
-                  )}
+                  transition={{ type: 'spring', stiffness: 400, damping: 20 }}>
+                  <Chip name={charName(c.characterId)} sub={charRole(c.characterId) || undefined} color="#e02020" />
                 </motion.div>
               ))}
             </AnimatePresence>
@@ -60,63 +58,37 @@ export default function BanPickStatus() {
         </div>
       )}
 
-      {/* PICK済み（蒼・紅 横並び） */}
+      {/* PICK済み */}
       {(pickedA.length > 0 || pickedB.length > 0) && (
         <div className="grid grid-cols-2 gap-2">
-          {/* 蒼チーム PICK */}
-          <div className="bg-gray-800 rounded p-2">
-            <div className="text-xs font-bold text-blue-400 mb-1.5 uppercase tracking-wide">
-              蒼PICK ({pickedA.length})
+          <div className="hud-panel rounded-sm p-2">
+            <div className="hud-title mb-1.5" style={{ color: '#1a6fe0' }}>
+              蒼 PICK ({pickedA.length})
             </div>
             <div className="space-y-1">
               <AnimatePresence>
                 {pickedA.map(c => (
-                  <motion.div
-                    key={c.characterId}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-900/50 border border-blue-700 text-xs"
-                  >
-                    <span className="w-5 h-5 rounded bg-blue-800 flex items-center justify-center font-bold text-blue-200 text-[10px] shrink-0">
-                      {charName(c.characterId)[0]}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="text-blue-100 font-semibold truncate">{charName(c.characterId)}</div>
-                      {playerName(c.pickedBy) && (
-                        <div className="text-blue-400 text-[10px] truncate">{playerName(c.pickedBy)}</div>
-                      )}
-                    </div>
+                  <motion.div key={c.characterId}
+                    initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}>
+                    <Chip name={charName(c.characterId)} sub={playerName(c.pickedBy) || undefined} color="#1a6fe0" />
                   </motion.div>
                 ))}
               </AnimatePresence>
             </div>
           </div>
 
-          {/* 紅チーム PICK */}
-          <div className="bg-gray-800 rounded p-2">
-            <div className="text-xs font-bold text-rose-400 mb-1.5 uppercase tracking-wide">
-              紅PICK ({pickedB.length})
+          <div className="hud-panel rounded-sm p-2">
+            <div className="hud-title mb-1.5" style={{ color: '#e0204a' }}>
+              紅 PICK ({pickedB.length})
             </div>
             <div className="space-y-1">
               <AnimatePresence>
                 {pickedB.map(c => (
-                  <motion.div
-                    key={c.characterId}
-                    initial={{ opacity: 0, x: 10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded bg-rose-900/50 border border-rose-700 text-xs"
-                  >
-                    <span className="w-5 h-5 rounded bg-rose-800 flex items-center justify-center font-bold text-rose-200 text-[10px] shrink-0">
-                      {charName(c.characterId)[0]}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="text-rose-100 font-semibold truncate">{charName(c.characterId)}</div>
-                      {playerName(c.pickedBy) && (
-                        <div className="text-rose-400 text-[10px] truncate">{playerName(c.pickedBy)}</div>
-                      )}
-                    </div>
+                  <motion.div key={c.characterId}
+                    initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}>
+                    <Chip name={charName(c.characterId)} sub={playerName(c.pickedBy) || undefined} color="#e0204a" />
                   </motion.div>
                 ))}
               </AnimatePresence>
