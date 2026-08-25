@@ -1,11 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-type Character = { id: number; name: string; role: string; icon_url?: string }
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:4000'
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  const characters: Character[] = Array.from({ length: 102 }, (_, i) => {
-    const id = i + 1
-    return { id, name: String(id), role: `Role ${((id - 1) % 5) + 1}`, icon_url: undefined }
-  })
-  res.status(200).json({ characters })
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  try {
+    const r = await fetch(`${BACKEND_URL}/api/characters`)
+    const j = await r.json()
+    return res.status(r.status).json(j)
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || String(err) })
+  }
 }

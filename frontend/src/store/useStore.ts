@@ -22,8 +22,6 @@ export const DEFAULT_PHASES: PhaseStep[] = [
   { type: 'PICK_B', count: 2 },
   { type: 'PICK_A', count: 2 },
   { type: 'PICK_B', count: 1 },
-  { type: 'PICK_A', count: 2 },
-  { type: 'PICK_B', count: 2 },
 ]
 
 type Player = { id: string; name: string; team?: 'A'|'B'; isHost?: boolean }

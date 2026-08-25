@@ -8,13 +8,11 @@ export type PhaseStep = { type: 'BAN' | 'PICK_A' | 'PICK_B'; count: number }
 
 // デフォルトフェーズ構成（変更可能）
 const DEFAULT_PHASE_SEQUENCE: PhaseStep[] = [
-  { type: 'BAN',    count: 0 },  // BAN: count は全員投票なので使用しない
+  { type: 'BAN',    count: 0 },
   { type: 'PICK_A', count: 1 },
   { type: 'PICK_B', count: 2 },
   { type: 'PICK_A', count: 2 },
   { type: 'PICK_B', count: 1 },
-  { type: 'PICK_A', count: 2 },
-  { type: 'PICK_B', count: 2 },
 ]
 
 type CharState = { characterId: number; state: 'available'|'banned'|'picked'; pickedBy?: string; pickedTeam?: 'A'|'B' }
