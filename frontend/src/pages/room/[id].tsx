@@ -6,6 +6,17 @@ import CharacterGrid from '../../components/CharacterGrid'
 import TeamPanel from '../../components/TeamPanel'
 import TurnPanel from '../../components/TurnPanel'
 
+function getSocketBackendUrl() {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return 'http://localhost:4000'
+    }
+  }
+
+  return process.env.NEXT_PUBLIC_API_URL || 'https://banpick-ykoq.onrender.com'
+}
+
 export default function RoomPage() {
   const router = useRouter()
   const { id } = router.query
@@ -21,11 +32,13 @@ export default function RoomPage() {
 
   useEffect(() => {
     if (!id) return
-    const socket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000', {
+    const socket = io(getSocketBackendUrl(), {
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
-      transports: ['websocket', 'polling']
+      transports: ['websocket', 'polling'],
+      timeout: 20000,
+      forceNew: true
     })
     socketRef.current = socket
     setSocket(socket)
@@ -37,17 +50,22 @@ export default function RoomPage() {
     playerIdRef.current = playerId
 
     const handleConnect = () => {
+      console.log('[room] socket connected', { roomId: id, playerId, socketId: socket.id })
       setSocketConnected(true)
       socket.emit('joinRoom', { roomId: id, playerId, playerName })
     }
 
     const handleDisconnect = () => {
+      console.warn('[room] socket disconnected', { roomId: id, playerId })
       setSocketConnected(false)
     }
 
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
-    socket.on('connect_error', () => setSocketConnected(false))
+    socket.on('connect_error', (err) => {
+      console.error('[room] socket connect_error', err.message)
+      setSocketConnected(false)
+    })
 
     // store roomId in Zustand
     setRoomState({ roomId: id as string })

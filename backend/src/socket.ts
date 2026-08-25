@@ -238,10 +238,14 @@ async function advanceTurn(io: Server, roomId: string) {
 export function createSockets(io: Server) {
   io.on('connection', (socket: Socket) => {
     socket.on('joinRoom', async ({ roomId, playerId, playerName }: any) => {
+      console.log('[joinRoom] request', { roomId, playerId, playerName, socketId: socket.id })
       // Initialize room and get canonical room id (UUID). Use that for socket.join and DB ops.
       const st = await initRoom(roomId)
       // ensure room exists
-      if (!st) return socket.emit('error', { message: 'room_not_found' })
+      if (!st) {
+        console.error('[joinRoom] room not found', { roomId, playerId, socketId: socket.id })
+        return socket.emit('error', { message: 'room_not_found' })
+      }
       const canonicalId = st.id
       socket.join(canonicalId)
 
@@ -290,9 +294,11 @@ export function createSockets(io: Server) {
 
       // cap players to 6
       if (st.players.length > 6) {
+        console.warn('[joinRoom] room full', { roomId: canonicalId, playerId, socketId: socket.id, players: st.players.length })
         socket.emit('error', { message: 'room_full' })
         return
       }
+      console.log('[joinRoom] success', { roomId: canonicalId, playerId: normalized?.id ?? resolved.id, socketId: socket.id, players: st.players.length })
       io.to(canonicalId).emit('room:players', { players: st.players })
       broadcastState(io, canonicalId)
     })
