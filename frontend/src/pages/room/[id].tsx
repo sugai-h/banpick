@@ -49,14 +49,15 @@ export default function RoomPage() {
     localStorage.setItem('playerId', playerId)
     playerIdRef.current = playerId
 
+    const resolvedRoomId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : ''
     const handleConnect = () => {
-      console.log('[room] socket connected', { roomId: id, playerId, socketId: socket.id })
+      console.log('[room] socket connected', { roomId: resolvedRoomId, playerId, socketId: socket.id })
       setSocketConnected(true)
-      socket.emit('joinRoom', { roomId: id, playerId, playerName })
+      socket.emit('joinRoom', { roomId: resolvedRoomId, playerId, playerName })
     }
 
     const handleDisconnect = () => {
-      console.warn('[room] socket disconnected', { roomId: id, playerId })
+      console.warn('[room] socket disconnected', { roomId: resolvedRoomId, playerId })
       setSocketConnected(false)
     }
 
@@ -85,7 +86,7 @@ export default function RoomPage() {
     })
 
     if (socket.connected) {
-      socket.emit('joinRoom', { roomId: id, playerId, playerName })
+      socket.emit('joinRoom', { roomId: resolvedRoomId, playerId, playerName })
     }
 
     return () => {

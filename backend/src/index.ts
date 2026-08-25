@@ -8,6 +8,19 @@ import { v4 as uuidv4 } from 'uuid'
 import { query } from './db'
 import { resolveJoinPlayerState } from './roomRules'
 
+async function generateRoomCode() {
+  const chars = '0123456789'
+  for (let attempt = 0; attempt < 20; attempt++) {
+    let roomCode = ''
+    for (let i = 0; i < 5; i++) {
+      roomCode += chars[Math.floor(Math.random() * chars.length)]
+    }
+    const existing = await query('SELECT id FROM rooms WHERE pin = $1', [roomCode])
+    if (existing.rows.length === 0) return roomCode
+  }
+  return String(Math.floor(10000 + Math.random() * 90000))
+}
+
 const app = express()
 app.use(cors())
 app.use(bodyParser.json())
@@ -29,8 +42,9 @@ app.get('/api/characters', async (req, res) => {
 app.post('/api/rooms', async (req, res) => {
   const { pin, hostName } = req.body
   const roomId = uuidv4()
+  const roomCode = pin || await generateRoomCode()
   try {
-    await query('INSERT INTO rooms (id, pin, status) VALUES ($1, $2, $3)', [roomId, pin || '', 'lobby'])
+    await query('INSERT INTO rooms (id, pin, status) VALUES ($1, $2, $3)', [roomId, roomCode, 'lobby'])
     // seed room_char_states from characters
     // ensure characters table has entries; if empty, seed default 1..102
     const charCountRes = await query('SELECT COUNT(*) FROM characters')
@@ -51,7 +65,7 @@ app.post('/api/rooms', async (req, res) => {
     // create host player record so creator is host and assigned to team A
     const playerId = uuidv4()
     await query('INSERT INTO players (id, room_id, name, is_host, team) VALUES ($1, $2, $3, $4, $5)', [playerId, roomId, hostName || 'Host', true, 'A'])
-    res.status(201).json({ roomId, playerId })
+    res.status(201).json({ roomId: roomCode, playerId })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'db_error' })

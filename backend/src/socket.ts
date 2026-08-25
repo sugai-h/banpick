@@ -349,8 +349,11 @@ export function createSockets(io: Server) {
 
         if (actionType === 'pick') {
           if (s.phase === 'BAN') return socket.emit('error', { message: 'invalid_phase_for_action' })
-          if (s.turnTeam && player.team !== s.turnTeam) return socket.emit('error', { message: 'not_your_turn' })
           if (!player.team) return socket.emit('error', { message: 'no_team_assigned' })
+          if (s.turnTeam && player.team !== s.turnTeam) return socket.emit('error', { message: 'not_your_turn' })
+        }
+        if (actionType === 'ban' && s.phase === 'BAN' && Object.prototype.hasOwnProperty.call(s.pendingBanVotes ?? {}, playerId)) {
+          return socket.emit('error', { message: 'already_voted' })
         }
         const client = await getClient()
         try {
@@ -365,6 +368,12 @@ export function createSockets(io: Server) {
             }
 
             s.pendingBanVotes ??= {}
+            if (Object.prototype.hasOwnProperty.call(s.pendingBanVotes, playerId)) {
+              await client.query('ROLLBACK')
+              client.release()
+              return socket.emit('error', { message: 'already_voted' })
+            }
+
             s.pendingBanVotes[playerId] = characterId
 
             const voteIds = roomPlayers.map((player) => player.id)

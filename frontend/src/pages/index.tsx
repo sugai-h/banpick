@@ -46,7 +46,7 @@ export default function Home() {
       // accidentally overwriting/losing the host flag and team assignment
       localStorage.setItem('playerName', name)
       localStorage.setItem('playerId', creatorPlayerId)
-      router.push(`/room/${newRoomId}`)
+      router.push(`/room/${String(newRoomId)}`)
     } catch (err:any) {
       alert(err?.message || String(err))
     } finally {
