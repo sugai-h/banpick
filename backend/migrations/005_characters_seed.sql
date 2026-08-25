@@ -1,13 +1,11 @@
 -- ================================================================
 -- キャラクターマスターデータ（全件差し替え）
--- room_char_states は room_id で紐づくため、
--- characters を削除 → 再挿入しても既存ルームのキャラ状態は壊れません
--- （room_char_states.character_id の FK は ON DELETE SET NULL 等ではなく
---  単純参照のため、characters が存在する間は正常動作します）
+-- TRUNCATE + INSERT を分けて実行できるよう DO $$ ブロックで囲む
 -- ================================================================
 
--- シーケンスをリセットして id を 1 から振り直す
-TRUNCATE TABLE characters RESTART IDENTITY CASCADE;
+DO $$ BEGIN
+  TRUNCATE TABLE characters RESTART IDENTITY CASCADE;
+END $$;
 
 INSERT INTO characters (name, icon_url, role) VALUES
 ('アタリ',           NULL, 'スプリンター'),

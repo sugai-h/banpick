@@ -162,15 +162,31 @@ import { runSqlFile } from './db'
 async function runMigrations() {
   const migrationsDir = path.join(__dirname, '..', 'migrations')
   if (!fs.existsSync(migrationsDir)) return
+
+  // マイグレーション管理テーブルを作成
+  await query(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      filename TEXT PRIMARY KEY,
+      applied_at TIMESTAMP DEFAULT now()
+    )
+  `).catch(() => {})
+
+  const applied = await query('SELECT filename FROM _migrations').catch(() => ({ rows: [] as any[] }))
+  const appliedSet = new Set(applied.rows.map((r: any) => r.filename))
+
   const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort()
   for (const f of files) {
+    if (appliedSet.has(f)) {
+      console.log(`  skip (already applied): ${f}`)
+      continue
+    }
     try {
       console.log(`Applying migration: ${f}`)
       await runSqlFile(path.join(migrationsDir, f))
+      await query('INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING', [f])
       console.log(`  ✓ ${f}`)
     } catch (err: any) {
-      // 冪等なSQLでも稀にエラーになる場合はスキップして続行
-      console.warn(`  ⚠ ${f} skipped (non-fatal):`, err?.message ?? err)
+      console.warn(`  ⚠ ${f} failed (non-fatal):`, err?.message ?? err)
     }
   }
   console.log('All migrations processed.')
