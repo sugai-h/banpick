@@ -17,6 +17,7 @@ export default function RoomPage() {
   const phase = useStore(s => s.phase)
   const currentPlayerId = typeof window !== 'undefined' ? localStorage.getItem('playerId') : null
   const currentPlayer = players.find(p=>p.id===currentPlayerId)
+  const socketConnected = Boolean(socketRef.current?.connected)
 
   useEffect(() => {
     if (!id) return
@@ -59,23 +60,42 @@ export default function RoomPage() {
     socketRef.current.emit('stopBanPick', { roomId: id, playerId: pid })
   }
 
+  const teamLabel = currentPlayer?.team ? (currentPlayer.team === 'A' ? '蒼' : '紅') : '未所属'
+  const disableReason = !currentPlayer
+    ? 'プレイヤー情報が未確定です'
+    : !currentPlayer.isHost && phase === 'lobby'
+      ? 'ホスト権限が必要です'
+      : phase !== 'lobby'
+        ? 'ゲーム中はチーム変更できません'
+        : ''
+
   return (
     <div className="min-h-screen p-4 bg-gray-900 text-white">
       <div className="container mx-auto grid grid-cols-12 gap-4">
         <div className="col-span-3">
-                  <div className="bg-gray-800 p-3 rounded mb-3">
-                    <h2 className="font-bold">Room</h2>
-                    <div>Room ID: {id}</div>
-                    <div>Players: {players.length}/6</div>
-                    <div className="mt-2 text-sm">
-                      {currentPlayer?.isHost ? <span className="text-green-300 font-semibold">あなたはホストです</span> : <span className="text-gray-400">ホスト権限なし</span>}
-                    </div>
-                    {phase === 'lobby' ? (
-                      <button onClick={startBanPick} disabled={!currentPlayer?.isHost} className="mt-2 py-1 px-2 bg-indigo-600 rounded disabled:opacity-50">BAN/PICK開始（ホスト）</button>
-                    ) : (
-                      <button onClick={stopBanPick} disabled={!currentPlayer?.isHost} className="mt-2 py-1 px-2 bg-red-600 rounded disabled:opacity-50">中止</button>
-                    )}
-                  </div>
+          <div className="bg-gray-800 p-3 rounded mb-3">
+            <h2 className="font-bold">Room</h2>
+            <div>Room ID: {id}</div>
+            <div>Players: {players.length}/6</div>
+            <div className="mt-2 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-gray-400" style={{ backgroundColor: socketConnected ? '#4ade80' : '#f87171' }} />
+                <span>{socketConnected ? '接続中' : '未接続'}</span>
+              </div>
+              <div className="mt-2">プレイヤーID: {currentPlayerId || '未設定'}</div>
+              <div className="mt-1">所属チーム: {teamLabel}</div>
+              <div className="mt-1">
+                {currentPlayer?.isHost ? <span className="text-green-300 font-semibold">あなたはホストです</span> : <span className="text-gray-400">ホスト権限なし</span>}
+              </div>
+              <div className="mt-1 text-xs text-gray-400">状態: {phase}</div>
+            </div>
+            {disableReason ? <div className="mt-2 text-xs text-amber-300">{disableReason}</div> : null}
+            {phase === 'lobby' ? (
+              <button onClick={startBanPick} disabled={!currentPlayer?.isHost} className="mt-2 py-1 px-2 bg-indigo-600 rounded disabled:opacity-50">BAN/PICK開始（ホスト）</button>
+            ) : (
+              <button onClick={stopBanPick} disabled={!currentPlayer?.isHost} className="mt-2 py-1 px-2 bg-red-600 rounded disabled:opacity-50">中止</button>
+            )}
+          </div>
         </div>
         <div className="col-span-6">
           <CharacterGrid socket={socket} />

@@ -18,6 +18,16 @@ export default function TeamPanel({ team, socket }: { team: 'A'|'B', socket?: an
     socket.emit('assignTeam', { roomId: useStore.getState().roomId, playerId: pid, team })
   }
 
+  const actionReason = !currentPlayer
+    ? 'プレイヤー情報がまだ受信されていません'
+    : phase !== 'lobby'
+      ? '対戦中のためチーム変更できません'
+      : isMyTeam
+        ? 'すでにこのチームに所属しています'
+        : isFull && !isMyTeam
+          ? `${label}チームは定員です`
+          : '参加可能'
+
   return (
     <div className={`bg-gray-800 p-3 rounded mt-3 border ${isMyTeam ? 'border-indigo-400' : 'border-transparent'}`}>
       <div className="flex items-center justify-between">
@@ -30,6 +40,7 @@ export default function TeamPanel({ team, socket }: { team: 'A'|'B', socket?: an
           {isMyTeam ? '所属中' : `${label}に移動`}
         </button>
       </div>
+      <div className="mt-2 text-[11px] text-gray-300">状態: {actionReason}</div>
       <ul>
         {players.map(p=> <li key={p.id} className="py-1">{p.name} {p.isHost? '(Host)':''}</li>)}
       </ul>
