@@ -11,24 +11,44 @@ export default function RoomPage() {
   const { id } = router.query
   const socketRef = useRef<any>(null)
   const [socket, setSocket] = useState<any>(null)
+  const [socketConnected, setSocketConnected] = useState(false)
   const playerIdRef = useRef<string | null>(null)
   const setRoomState = useStore(s => s.setRoomState)
   const players = useStore(s => s.players)
   const phase = useStore(s => s.phase)
   const currentPlayerId = typeof window !== 'undefined' ? localStorage.getItem('playerId') : null
   const currentPlayer = players.find(p=>p.id===currentPlayerId)
-  const socketConnected = Boolean(socketRef.current?.connected)
 
   useEffect(() => {
     if (!id) return
-    const socket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000')
+    const socket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000', {
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      transports: ['websocket', 'polling']
+    })
     socketRef.current = socket
     setSocket(socket)
+    setSocketConnected(socket.connected)
+
     const playerName = localStorage.getItem('playerName') || 'Player'
     const playerId = localStorage.getItem('playerId') || Math.random().toString(36).slice(2)
     localStorage.setItem('playerId', playerId)
     playerIdRef.current = playerId
-    socket.emit('joinRoom', { roomId: id, playerId, playerName })
+
+    const handleConnect = () => {
+      setSocketConnected(true)
+      socket.emit('joinRoom', { roomId: id, playerId, playerName })
+    }
+
+    const handleDisconnect = () => {
+      setSocketConnected(false)
+    }
+
+    socket.on('connect', handleConnect)
+    socket.on('disconnect', handleDisconnect)
+    socket.on('connect_error', () => setSocketConnected(false))
+
     // store roomId in Zustand
     setRoomState({ roomId: id as string })
     socket.on('room:state', (state:any) => setRoomState(state))
@@ -45,8 +65,17 @@ export default function RoomPage() {
       console.error('socket error', e)
       alert(e?.message || JSON.stringify(e))
     })
-    return () => { socket.disconnect() }
-  }, [id, setRoomState])
+
+    if (socket.connected) {
+      socket.emit('joinRoom', { roomId: id, playerId, playerName })
+    }
+
+    return () => {
+      socket.off('connect', handleConnect)
+      socket.off('disconnect', handleDisconnect)
+      socket.disconnect()
+    }
+  }, [id, router, setRoomState])
 
   const startBanPick = () => {
     const pid = playerIdRef.current
