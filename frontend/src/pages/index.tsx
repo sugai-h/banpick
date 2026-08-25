@@ -37,15 +37,15 @@ export default function Home() {
         // otherwise fallthrough to create
       }
 
-      // create room then join as creator (use provided playerId)
-        const createRes = await fetch('/api/rooms', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ hostName: name }) })
+      // create room (host player record with is_host=true, team already set server-side)
+      const createRes = await fetch('/api/rooms', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ hostName: name }) })
       if (!createRes.ok) throw new Error('create_failed')
       const { roomId: newRoomId, playerId: creatorPlayerId } = await createRes.json()
-      // join as host using the created playerId so DB host record is preserved
-        const joinRes2 = await fetch('/api/rooms/join', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ roomId: newRoomId, playerName: name, playerId: creatorPlayerId }) })
-      const { playerId } = await joinRes2.json()
+      if (!creatorPlayerId) throw new Error('create_failed_no_player_id')
+      // use the host playerId directly - no second /join call needed, avoids
+      // accidentally overwriting/losing the host flag and team assignment
       localStorage.setItem('playerName', name)
-      localStorage.setItem('playerId', playerId)
+      localStorage.setItem('playerId', creatorPlayerId)
       router.push(`/room/${newRoomId}`)
     } catch (err:any) {
       alert(err?.message || String(err))

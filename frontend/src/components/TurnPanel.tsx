@@ -1,4 +1,4 @@
-import { useStore } from '../store/useStore'
+import { useStore, TEAM_LABELS } from '../store/useStore'
 import { motion } from 'framer-motion'
 
 export default function TurnPanel(){
@@ -11,7 +11,7 @@ export default function TurnPanel(){
   return (
     <div className="bg-gray-800 p-3 rounded">
       <div className="text-sm">Phase: {phase}</div>
-      <div className="text-lg font-bold">Turn: {turnTeam || '—'}</div>
+      <div className="text-lg font-bold">Turn: {turnTeam ? TEAM_LABELS[turnTeam] : '—'}</div>
       {turnTeam && (
         <div className="text-sm text-gray-300">Players: {turnPlayers.length ? turnPlayers.map(p=>p.name + (p.isHost? ' (Host)':'')).join(', ') : '—'}</div>
       )}

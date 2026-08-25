@@ -78,7 +78,9 @@ app.post('/api/rooms/join', async (req, res) => {
     if (!roomRow) return res.status(404).json({ error: 'room_not_found' })
     if (roomRow.pin && pin && roomRow.pin !== pin) return res.status(403).json({ error: 'invalid_pin' })
     const playerId = providedPlayerId || uuidv4()
-    await query('INSERT INTO players (id, room_id, name, is_host) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET room_id = $2, name = $3', [playerId, roomRow.id, playerName || 'Player', false])
+    // team is left unassigned (NULL) here; the player chooses their team manually
+    // via the TeamPanel UI once inside the room
+    await query('INSERT INTO players (id, room_id, name, is_host, team) VALUES ($1, $2, $3, $4, NULL) ON CONFLICT (id) DO UPDATE SET room_id = $2, name = $3', [playerId, roomRow.id, playerName || 'Player', false])
     res.json({ playerId })
   } catch (err) {
     console.error(err)

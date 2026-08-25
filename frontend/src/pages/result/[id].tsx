@@ -23,7 +23,7 @@ export default function ResultPage(){
       <h1 className="text-2xl mb-4">結果 - Room {id}</h1>
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-gray-800 p-4 rounded">
-          <h2 className="font-bold">Team A</h2>
+          <h2 className="font-bold">蒼チーム</h2>
           <ul>
             {teamA.map((t:any,i:number)=>(<li key={i}>{t.picked_by} - Character {t.character_id}</li>))}
           </ul>
@@ -35,7 +35,7 @@ export default function ResultPage(){
           </ul>
         </div>
         <div className="bg-gray-800 p-4 rounded">
-          <h2 className="font-bold">Team B</h2>
+          <h2 className="font-bold">紅チーム</h2>
           <ul>
             {teamB.map((t:any,i:number)=>(<li key={i}>{t.picked_by} - Character {t.character_id}</li>))}
           </ul>

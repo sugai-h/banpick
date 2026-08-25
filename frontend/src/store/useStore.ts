@@ -1,5 +1,7 @@
 import create from 'zustand'
 
+export const TEAM_LABELS: Record<'A'|'B', string> = { A: '蒼', B: '紅' }
+
 type Player = { id: string; name: string; team?: 'A'|'B'; isHost?: boolean }
 type CharState = { characterId: number; state: 'available'|'banned'|'picked'; pickedBy?: string; pickedTeam?: 'A'|'B' }
 
