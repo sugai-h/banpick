@@ -6,6 +6,7 @@ import bodyParser from 'body-parser'
 import { createSockets } from './socket'
 import { v4 as uuidv4 } from 'uuid'
 import { query } from './db'
+import { resolveJoinPlayerState } from './roomRules'
 
 const app = express()
 app.use(cors())
@@ -77,10 +78,30 @@ app.post('/api/rooms/join', async (req, res) => {
     }
     if (!roomRow) return res.status(404).json({ error: 'room_not_found' })
     if (roomRow.pin && pin && roomRow.pin !== pin) return res.status(403).json({ error: 'invalid_pin' })
+
+    const existingPlayers = (await query('SELECT id, name, team, is_host FROM players WHERE room_id=$1', [roomRow.id])).rows
     const playerId = providedPlayerId || uuidv4()
-    // team is left unassigned (NULL) here; the player chooses their team manually
-    // via the TeamPanel UI once inside the room
-    await query('INSERT INTO players (id, room_id, name, is_host, team) VALUES ($1, $2, $3, $4, NULL) ON CONFLICT (id) DO UPDATE SET room_id = $2, name = $3', [playerId, roomRow.id, playerName || 'Player', false])
+    const resolved = resolveJoinPlayerState(existingPlayers, playerId, playerName || 'Player')
+
+    const hostRows = (await query('SELECT id FROM players WHERE room_id=$1 AND is_host = true', [roomRow.id])).rows
+    if (hostRows.length > 0 && resolved.isHost && hostRows[0].id !== playerId) {
+      await query('UPDATE players SET is_host = false WHERE room_id=$1 AND id <> $2', [roomRow.id, playerId])
+    }
+    if (hostRows.length === 0 && !resolved.isHost) {
+      await query('UPDATE players SET is_host = true WHERE room_id=$1 AND id=$2', [roomRow.id, playerId])
+    }
+
+    await query(
+      `INSERT INTO players (id, room_id, name, is_host, team)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (id) DO UPDATE SET
+         room_id = EXCLUDED.room_id,
+         name = EXCLUDED.name,
+         is_host = EXCLUDED.is_host,
+         team = EXCLUDED.team`,
+      [playerId, roomRow.id, resolved.name, resolved.isHost, resolved.team ?? null]
+    )
+
     res.json({ playerId })
   } catch (err) {
     console.error(err)

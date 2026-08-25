@@ -1,5 +1,6 @@
 import { Server, Socket } from 'socket.io'
 import { query, getClient } from './db'
+import { reconcileHostAssignment, resolveJoinPlayerState } from './roomRules'
 
 type CharState = { characterId: number; state: 'available'|'banned'|'picked'; pickedBy?: string; pickedTeam?: 'A'|'B' }
 type Player = { id: string; name: string; socketId?: string; team?: 'A'|'B'; isHost?: boolean }
@@ -222,23 +223,50 @@ export function createSockets(io: Server) {
       if (!st) return socket.emit('error', { message: 'room_not_found' })
       const canonicalId = st.id
       socket.join(canonicalId)
-      // add or update player
-      let p = st.players.find(p => p.id === playerId)
+
+      const resolved = resolveJoinPlayerState(st.players, playerId || socket.id, playerName || 'Player')
+      let p: Player | undefined = st.players.find((player) => player.id === resolved.id)
       if (!p) {
-        // check current player count in DB using canonical id
-        const cntRes = await query('SELECT COUNT(*) FROM players WHERE room_id=$1', [canonicalId])
-        const count = parseInt(cntRes.rows[0].count)
-        const isHost = count === 0
-        // assign team A to the first joining player (host)
-        const team = isHost ? 'A' : undefined
-        p = { id: playerId || socket.id, name: playerName || 'Player', socketId: socket.id, isHost, team }
+        p = {
+          id: resolved.id,
+          name: resolved.name,
+          socketId: socket.id,
+          isHost: resolved.isHost,
+          team: resolved.team
+        }
         st.players.push(p)
-        // persist player, set is_host if first
-        await query('INSERT INTO players (id, room_id, name, socket_id, is_host, team) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET socket_id = $4, room_id = $2, name = $3', [p.id, canonicalId, p.name, socket.id, isHost, team])
       } else {
+        p.name = resolved.name
+        p.isHost = resolved.isHost
+        p.team = resolved.team ?? p.team
         p.socketId = socket.id
-        await query('UPDATE players SET socket_id=$1 WHERE id=$2', [socket.id, p.id])
       }
+
+      reconcileHostAssignment(st.players)
+      const normalized = st.players.find((player) => player.id === resolved.id)
+      if (normalized) {
+        normalized.socketId = socket.id
+      }
+
+      await query(
+        `INSERT INTO players (id, room_id, name, socket_id, is_host, team)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (id) DO UPDATE SET
+           socket_id = EXCLUDED.socket_id,
+           room_id = EXCLUDED.room_id,
+           name = EXCLUDED.name,
+           is_host = EXCLUDED.is_host,
+           team = EXCLUDED.team`,
+        [
+          normalized?.id ?? resolved.id,
+          canonicalId,
+          normalized?.name ?? resolved.name,
+          socket.id,
+          normalized?.isHost ?? resolved.isHost,
+          normalized?.team ?? resolved.team ?? null
+        ]
+      )
+
       // cap players to 6
       if (st.players.length > 6) {
         socket.emit('error', { message: 'room_full' })
