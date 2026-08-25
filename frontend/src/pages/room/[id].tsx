@@ -8,13 +8,44 @@ import TurnPanel from '../../components/TurnPanel'
 
 function getSocketBackendUrl() {
   if (typeof window !== 'undefined') {
+    const envUrl = process.env.NEXT_PUBLIC_API_URL
+    if (envUrl) return envUrl
+
     const host = window.location.hostname
     if (host === 'localhost' || host === '127.0.0.1') {
       return 'http://localhost:4000'
     }
+
+    return window.location.origin
   }
 
-  return process.env.NEXT_PUBLIC_API_URL || 'https://banpick-ykoq.onrender.com'
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'
+}
+
+async function ensurePlayerForRoom(roomId: string, playerName: string) {
+  const existingPlayerId = localStorage.getItem('playerId')
+  if (existingPlayerId) {
+    return existingPlayerId
+  }
+
+  const res = await fetch('/api/rooms/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roomId, playerName })
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error || 'join_failed')
+  }
+
+  const { playerId } = await res.json()
+  if (!playerId) {
+    throw new Error('join_failed_no_player_id')
+  }
+
+  localStorage.setItem('playerId', playerId)
+  return playerId
 }
 
 export default function RoomPage() {
@@ -32,6 +63,11 @@ export default function RoomPage() {
 
   useEffect(() => {
     if (!id) return
+
+    const resolvedRoomId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : ''
+    const playerName = localStorage.getItem('playerName') || 'Player'
+
+    let isMounted = true
     const socket = io(getSocketBackendUrl(), {
       reconnection: true,
       reconnectionAttempts: 10,
@@ -44,20 +80,24 @@ export default function RoomPage() {
     setSocket(socket)
     setSocketConnected(socket.connected)
 
-    const playerName = localStorage.getItem('playerName') || 'Player'
-    const playerId = localStorage.getItem('playerId') || Math.random().toString(36).slice(2)
-    localStorage.setItem('playerId', playerId)
-    playerIdRef.current = playerId
-
-    const resolvedRoomId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : ''
-    const handleConnect = () => {
-      console.log('[room] socket connected', { roomId: resolvedRoomId, playerId, socketId: socket.id })
-      setSocketConnected(true)
-      socket.emit('joinRoom', { roomId: resolvedRoomId, playerId, playerName })
+    const handleConnect = async () => {
+      try {
+        const playerId = await ensurePlayerForRoom(resolvedRoomId, playerName)
+        if (!isMounted) return
+        playerIdRef.current = playerId
+        localStorage.setItem('playerId', playerId)
+        console.log('[room] socket connected', { roomId: resolvedRoomId, playerId, socketId: socket.id })
+        setSocketConnected(true)
+        socket.emit('joinRoom', { roomId: resolvedRoomId, playerId, playerName })
+      } catch (error: any) {
+        console.error('[room] ensurePlayerForRoom failed', error)
+        alert(error?.message || 'room_join_failed')
+      }
     }
 
     const handleDisconnect = () => {
-      console.warn('[room] socket disconnected', { roomId: resolvedRoomId, playerId })
+      const currentPlayerId = playerIdRef.current ?? localStorage.getItem('playerId')
+      console.warn('[room] socket disconnected', { roomId: resolvedRoomId, playerId: currentPlayerId })
       setSocketConnected(false)
     }
 
@@ -86,10 +126,11 @@ export default function RoomPage() {
     })
 
     if (socket.connected) {
-      socket.emit('joinRoom', { roomId: resolvedRoomId, playerId, playerName })
+      void handleConnect()
     }
 
     return () => {
+      isMounted = false
       socket.off('connect', handleConnect)
       socket.off('disconnect', handleDisconnect)
       socket.disconnect()
