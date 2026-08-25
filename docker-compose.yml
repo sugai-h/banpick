@@ -1,0 +1,27 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: banpick
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+  backend:
+    build: ./backend
+    depends_on: [db]
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/banpick
+      PORT: 4000
+    ports:
+      - "4000:4000"
+  frontend:
+    build: ./frontend
+    depends_on: [backend]
+    ports:
+      - "3000:3000"
+
+volumes:
+  db-data:
