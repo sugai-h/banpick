@@ -8,8 +8,15 @@ export default function TurnPanel(){
   const players = useStore(s=>s.players)
   const phaseIndex = useStore(s=>s.phaseIndex) ?? 0
   const customPhases = useStore(s=>s.customPhases)
+  const remainingSelections = useStore(s=>s.remainingSelections) ?? 0
   const turnPlayers = turnTeam ? players.filter(p=>p.team===turnTeam) : []
   const percent = Math.max(0, Math.min(100, Math.round((remainingTime/30)*100)))
+
+  // 現在フェーズの総枚数と進捗
+  const currentPhase = customPhases[phaseIndex]
+  const totalCount = currentPhase?.type !== 'BAN' ? (currentPhase?.count ?? 0) : 0
+  const doneCount = totalCount - remainingSelections
+  const pickProgress = totalCount > 0 ? `${doneCount + 1}/${totalCount}` : ''
 
   const turnLabel =
     phase === 'BAN'   ? '全員選択' :
@@ -24,7 +31,12 @@ export default function TurnPanel(){
   return (
     <div className="bg-gray-800 p-3 rounded mb-3">
       <div className="text-sm text-gray-400">Phase: {phase}</div>
-      <div className="text-lg font-bold">Turn: {turnLabel}</div>
+      <div className="text-lg font-bold">
+        Turn: {turnLabel}
+        {pickProgress && (
+          <span className="ml-2 text-base font-mono text-indigo-300">{pickProgress}</span>
+        )}
+      </div>
       {phase === 'BAN' ? (
         <div className="text-sm text-gray-300">
           全員: {players.length ? players.map(p=>p.name+(p.isHost?' (Host)':'')).join(', ') : '—'}

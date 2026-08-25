@@ -285,17 +285,16 @@ async function advanceTurn(io: Server, roomId: string) {
     return
   }
 
-  // PICK フェーズ: remainingSelections を1つ消費
-  if ((s.remainingSelections ?? 0) > 0) {
-    s.remainingSelections!--
-    await query('UPDATE rooms SET remaining_selections=$1 WHERE id=$2', [s.remainingSelections, canonicalId])
-  }
+  // PICK フェーズ:
+  // ※ デクリメントは呼び出し元(requestAction/handleTimeout)で完了済み。
+  //   ここでは現在の remainingSelections を見るだけ。
 
-  // まだ残りがあれば同じフェーズを継続
+  // まだ残りがあれば同じフェーズ・同じチームを継続
   if ((s.remainingSelections ?? 0) > 0) {
     s.remainingTime = 30
     io.to(canonicalId).emit('turn:next', { turnTeam: s.turnTeam, remainingTime: s.remainingTime, remainingSelections: s.remainingSelections })
     startTimer(io, canonicalId)
+    broadcastState(io, canonicalId)
     return
   }
 

@@ -36,6 +36,7 @@ type State = {
   phase: string
   turnTeam?: 'A'|'B'|null
   remainingTime: number
+  remainingSelections: number
   phaseIndex?: number
   customPhases: PhaseStep[]
   setRoomState: (s: Partial<Omit<State, 'setRoomState'>>) => void
@@ -46,6 +47,7 @@ export const useStore = create<State>((set) => ({
   charStates: [],
   phase: 'lobby',
   remainingTime: 30,
+  remainingSelections: 0,
   roomId: undefined,
   phaseIndex: 0,
   customPhases: [...DEFAULT_PHASES],
